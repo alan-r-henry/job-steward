@@ -63,11 +63,20 @@ the desktop and dwm holds ~3 GB of VRAM):
 
 | job | start at (`--need`) | pause between items | hard stop |
 |---|---|---|---|
-| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 4.5 GB | 2.8 GB | 2.0 GB |
+| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (uses ~3.5 GB of RAM while painting; 4.5 failed twice on the first picture) | 2.8 GB | 2.0 GB |
 | Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
 Client and Overwolf ~1-2 GB together.
+
+## After force-killed GPU jobs
+
+Killing a GPU process (watchdog, `--kill-below`) can leave memory held inside
+the graphics driver: on the owner's PC, after a day of several kills, idle
+free RAM fell from ~8-9 GB to ~5 GB and dwm's reported GPU memory rose from ~3
+to ~8 GB. If jobs keep stalling at the start, ask the user to restart the
+graphics driver (Win + Ctrl + Shift + B; the screen blinks, windows stay) or
+the PC. Don't do it for them.
 
 ## Memory-mapped weights
 
