@@ -45,7 +45,10 @@ The tool is `ramgate.py` next to this file (standard library only, any Python 3)
    PC stays responsive and the job resumes later.
 5. **One GPU job at a time.** Two big GPU jobs together oversubscribe VRAM and
    spill into system RAM (on AMD/ROCm on Windows this also corrupted copies).
-6. **Tell the user** when a job is on hold and why ("on hold: 3.1 GB free, needs
+6. **Point the user at the status file** `~/ramgate-status.txt` (one line,
+   refreshed every few seconds: ON HOLD / starting in N s / RUNNING, N done /
+   PAUSED / DONE / FAILED). Set `RAMGATE_STATUS` or `--status` for another path.
+7. **Tell the user** when a job is on hold and why ("on hold: 3.1 GB free, needs
    4.5; it starts by itself when RAM is free"). Never ask them to close apps
    unless they want the job sooner.
 

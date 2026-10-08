@@ -16,6 +16,13 @@ python skills/ram-gate/ramgate.py run --need 4.5 --label painter \
     --progress-glob "out/*.png" -- python paint.py --out out
 ```
 
+What it is doing right now is always in one line of `~/ramgate-status.txt`:
+
+```
+16:40:05 painter: ON HOLD, 3.2 of 4.5 GB RAM free; starts by itself when RAM is free
+16:41:12 painter: RUNNING since 16:41, 4.9 GB RAM free, 3 done
+```
+
 Standard library only; Windows, Linux and macOS. See
 [`skills/ram-gate/SKILL.md`](skills/ram-gate/SKILL.md) for the rules Claude
 follows and the measured thresholds.

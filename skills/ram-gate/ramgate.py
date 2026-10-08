@@ -22,6 +22,12 @@ restart resumes. A command "stops because RAM got low" when it either:
   the last resort for tools that don't watch memory; the item in progress is
   lost.
 
+A one-line status file shows what the gate is doing right now, for example
+"16:40:05 painter: ON HOLD, 3.2 of 4.5 GB RAM free; starts by itself when RAM
+is free" or "... RUNNING since 16:26, 4.9 GB free, 3 done". It is
+~/ramgate-status.txt unless --status or the RAMGATE_STATUS variable says
+otherwise.
+
 Two low-RAM stops in a row that finish nothing count as a real failure (the job
 needs more memory than the machine has free), and ramgate exits non-zero.
 Progress is measured with --progress-glob (count of files matching it).
@@ -50,6 +56,20 @@ from typing import Callable, Optional, Sequence
 log = logging.getLogger("ramgate")
 
 PAUSED = 75  # exit code: the worker stopped cleanly because free RAM got low
+
+STATUS_PATH = os.environ.get("RAMGATE_STATUS") or os.path.join(os.path.expanduser("~"),
+                                                               "ramgate-status.txt")
+
+
+def status(text: str) -> None:
+    """Replace the one-line status file; never let it break the job."""
+    try:
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+        os.replace(tmp, STATUS_PATH)
+    except OSError:
+        pass
 
 
 def free_gb() -> float:
@@ -96,12 +116,18 @@ def wait_for_ram(need_gb: float, label: str = "job", steady_s: float = 60,
         free = free_gb()
         if free >= need_gb:
             since = since or time.time()
-            if time.time() - since >= steady_s:
+            left = steady_s - (time.time() - since)
+            if left <= 0:
                 if held:
                     log.info("%s: RAM is free again (%.1f GB), starting", label, free)
+                status(f"{label}: STARTING, {free:.1f} GB RAM free")
                 return
+            status(f"{label}: RAM is free ({free:.1f} GB), starting in {left:.0f} s "
+                   f"if it stays free")
         else:
             since = None
+            status(f"{label}: ON HOLD, {free:.1f} of {need_gb:.1f} GB RAM free; "
+                   f"starts by itself when RAM is free")
             if not held:
                 log.info("%s: on hold, %.1f GB RAM free and it needs %.1f GB; it starts by "
                          "itself once other apps free some memory", label, free, need_gb)
@@ -141,10 +167,17 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
         proc = subprocess.Popen(list(cmd), stdin=subprocess.DEVNULL,
                                 start_new_session=sys.platform != "win32")
 
+        started = time.strftime("%H:%M")
+        last_status = [0.0]
+
         def watch() -> None:
             while not done.wait(0.5):
                 free = free_gb()
                 lowest[0] = min(lowest[0], free)
+                if time.time() - last_status[0] >= 5:
+                    last_status[0] = time.time()
+                    count = f", {progress()} done" if progress else ""
+                    status(f"{label}: RUNNING since {started}, {free:.1f} GB RAM free{count}")
                 if kill_below_gb is not None and free < kill_below_gb and not killed.is_set():
                     log.warning("%s: %.1f GB RAM free, under %.1f GB; stopping it to keep the "
                                 "PC responsive", label, free, kill_below_gb)
@@ -157,21 +190,26 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
         done.set()
         watcher.join()
         if code == 0 and not killed.is_set():
+            status(f"{label}: DONE")
             return
         ram_caused = code == PAUSED or killed.is_set() or lowest[0] <= low_gb
         if not ram_caused:
+            status(f"{label}: FAILED (exit {code}); see its log")
             raise RuntimeError(f"{label} failed (exit {code}); lowest free RAM was "
                                f"{lowest[0]:.1f} GB, so not a memory pause")
         made = (progress() if progress else 1) - before
         stalls = 0 if made > 0 else stalls + 1
         if stalls >= 2:
+            status(f"{label}: FAILED, it keeps running out of RAM without finishing anything")
             raise RuntimeError(f"{label} stopped twice for low RAM without finishing anything; "
                                "it may need more memory than this machine has free")
         log.info("%s: paused for low RAM (lowest %.1f GB free); waiting to resume", label,
                  lowest[0])
+        status(f"{label}: PAUSED for low RAM; resumes by itself when RAM is free")
 
 
 def main() -> int:
+    global STATUS_PATH
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -189,9 +227,13 @@ def main() -> int:
     r.add_argument("--kill-below", type=float, help="kill the command if free RAM falls under this")
     r.add_argument("--progress-glob", help="files counted as finished items, e.g. 'out/*.png'")
     r.add_argument("command", nargs=argparse.REMAINDER)
+    for parser in (w, r):
+        parser.add_argument("--status", help=f"one-line status file (default {STATUS_PATH})")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s ramgate: %(message)s",
                         datefmt="%H:%M:%S")
+    if getattr(args, "status", None):
+        STATUS_PATH = args.status
     if args.cmd == "free":
         print(f"{free_gb():.1f}")
         return 0
