@@ -59,24 +59,30 @@ lowest value, and set `--need` to the job's drop plus about 2 GB of headroom
 for the user.
 
 Measured on the owner's PC (15.2 GB RAM, RX 9060 XT 16 GB; the GPU also drives
-the desktop and dwm holds ~3 GB of VRAM):
+the desktop and dwm normally holds 0.2-3 GB of VRAM):
 
-| job | start at (`--need`) | pause between items | hard stop |
-|---|---|---|---|
-| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (uses ~3.5 GB of RAM while painting; 4.5 failed twice on the first picture) | 2.8 GB | 2.0 GB |
-| Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB |
+| job | start at (`--need`) | pause between items | hard stop | `--max-desktop-gpu` |
+|---|---|---|---|---|
+| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (uses ~3.5 GB of RAM while painting; 4.5 failed twice on the first picture) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
+| Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB | not needed (~4 GB VRAM) |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
 Client and Overwolf ~1-2 GB together.
 
-## After force-killed GPU jobs
+## The desktop's graphics memory (big GPU jobs on Windows)
 
-Killing a GPU process (watchdog, `--kill-below`) can leave memory held inside
-the graphics driver: on the owner's PC, after a day of several kills, idle
-free RAM fell from ~8-9 GB to ~5 GB and dwm's reported GPU memory rose from ~3
-to ~8 GB. If jobs keep stalling at the start, ask the user to restart the
-graphics driver (Win + Ctrl + Shift + B; the screen blinks, windows stay) or
-the PC. Don't do it for them.
+When the GPU also drives the screen, the desktop compositor (dwm) holds some
+of its memory. After a day of force-killed GPU jobs on the owner's PC, dwm
+held ~8 GB of the 16 GB card; the painter (~11 GB peak) no longer fit, Windows
+spilled it into system RAM, and it died on its first picture every time. A
+graphics-driver reset (Win + Ctrl + Shift + B) did **not** free it; a PC
+restart took dwm back to 0.2 GB.
+
+So for big GPU jobs add `--max-desktop-gpu <GB>` (card size minus the job's
+VRAM peak, minus ~1 GB): the gate also holds while dwm holds more than that,
+and the status file says so. `python ramgate.py desktop-gpu` prints it. When a
+job is held for this, ask the user to sign out or restart the PC; don't do it
+for them.
 
 ## Memory-mapped weights
 
@@ -91,4 +97,5 @@ tensor in RAM at a time. For transformers models, a drop-in reader patched over
 ```bash
 python ramgate.py free              # free RAM now, in GB
 python ramgate.py wait --need 4.5   # block (e.g. at the top of a shell script)
+python ramgate.py desktop-gpu       # graphics memory the desktop (dwm) holds, in GB
 ```

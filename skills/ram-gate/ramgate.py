@@ -8,6 +8,7 @@ opens a browser or app, and resume by themselves when it is closed again.
     python ramgate.py wait --need 4.5                       # block until RAM is free
     python ramgate.py run --need 4.5 --label painter -- python paint.py ...
     python ramgate.py run --need 4 --kill-below 1.5 -- some-tool --args
+    python ramgate.py run --need 6.5 --max-desktop-gpu 4 -- python big_gpu_job.py
 
 `run` waits until free RAM has stayed at or above --need for --steady seconds,
 then starts the command. When the command stops because RAM got low, it waits
@@ -106,15 +107,54 @@ def low(below_gb: float) -> bool:
     return free_gb() < below_gb
 
 
+def desktop_gpu_gb() -> Optional[float]:
+    """Graphics memory held by the Windows desktop compositor (dwm), in GB.
+
+    On a GPU that also drives the screen, dwm's share can grow (seen after GPU
+    jobs were force-killed) and only a sign-out or restart gives it back. While
+    it is high, a big GPU job doesn't fit and Windows spills it into system RAM.
+    None when unknown or not on Windows. Takes about 2 s.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        row = subprocess.run(["tasklist", "/FI", "IMAGENAME eq dwm.exe", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=20).stdout
+        pid = int(row.split('","')[1])
+        out = subprocess.run(["typeperf", rf"\GPU Process Memory(pid_{pid}_*)\Local Usage",
+                              "-sc", "1"], capture_output=True, text=True, timeout=30).stdout
+        data = [line for line in out.splitlines() if re.match(r'"\d', line)][-1]
+        return sum(float(v.strip('"')) for v in data.split(",")[1:] if v.strip('"')) / 2**30
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
 def wait_for_ram(need_gb: float, label: str = "job", steady_s: float = 60,
-                 poll_s: float = 5) -> None:
+                 poll_s: float = 5, max_desktop_gpu_gb: Optional[float] = None) -> None:
     """Block until free RAM has stayed at or above need_gb for steady_s seconds,
-    so a browser closed for a moment doesn't start the job."""
+    so a browser closed for a moment doesn't start the job.
+
+    max_desktop_gpu_gb: for big GPU jobs, also hold while dwm holds more graphics
+    memory than this (checked once a minute), since the job would spill into RAM.
+    """
     since: Optional[float] = None
     held = False
+    gpu_checked, desktop_gpu = 0.0, None
     while True:
         free = free_gb()
-        if free >= need_gb:
+        if max_desktop_gpu_gb is not None and time.time() - gpu_checked >= 60:
+            gpu_checked, desktop_gpu = time.time(), desktop_gpu_gb()
+        if desktop_gpu is not None and desktop_gpu > max_desktop_gpu_gb:
+            since = None
+            status(f"{label}: ON HOLD, the desktop holds {desktop_gpu:.1f} GB of graphics memory "
+                   f"(the job fits under {max_desktop_gpu_gb:.1f}); a sign-out or PC restart "
+                   f"frees it")
+            if not held:
+                log.info("%s: on hold, the desktop (dwm) holds %.1f GB of graphics memory and "
+                         "the job fits only under %.1f GB; a sign-out or restart frees it",
+                         label, desktop_gpu, max_desktop_gpu_gb)
+                held = True
+        elif free >= need_gb:
             since = since or time.time()
             left = steady_s - (time.time() - since)
             if left <= 0:
@@ -148,18 +188,20 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float = 60,
         low_gb: Optional[float] = None, kill_below_gb: Optional[float] = None,
-        progress: Optional[Callable[[], int]] = None) -> None:
+        progress: Optional[Callable[[], int]] = None,
+        max_desktop_gpu_gb: Optional[float] = None) -> None:
     """Run cmd when RAM allows; after a low-RAM stop, wait for RAM and run it again.
 
     low_gb: a failure while free RAM fell to or under this counts as caused by
     other apps (default: 55% of need_gb). kill_below_gb: kill the command (and
     its children) if free RAM falls under this. progress: returns a count of
     finished items, so a restart loop that gets nowhere is noticed.
+    max_desktop_gpu_gb: see wait_for_ram.
     """
     low_gb = need_gb * 0.55 if low_gb is None else low_gb
     stalls = 0
     while True:
-        wait_for_ram(need_gb, label, steady_s)
+        wait_for_ram(need_gb, label, steady_s, max_desktop_gpu_gb=max_desktop_gpu_gb)
         before = progress() if progress else 0
         lowest = [free_gb()]
         killed = threading.Event()
@@ -214,6 +256,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("free", help="print free RAM in GB")
+    sub.add_parser("desktop-gpu", help="print the desktop's (dwm's) graphics memory in GB")
     w = sub.add_parser("wait", help="block until RAM is free")
     w.add_argument("--need", type=float, required=True, help="GB of free RAM required")
     w.add_argument("--steady", type=float, default=60, help="seconds it must stay free")
@@ -229,6 +272,9 @@ def main() -> int:
     r.add_argument("command", nargs=argparse.REMAINDER)
     for parser in (w, r):
         parser.add_argument("--status", help=f"one-line status file (default {STATUS_PATH})")
+        parser.add_argument("--max-desktop-gpu", type=float,
+                            help="also hold while the desktop (dwm) holds more graphics memory "
+                                 "than this, in GB (Windows; for big GPU jobs)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s ramgate: %(message)s",
                         datefmt="%H:%M:%S")
@@ -237,15 +283,20 @@ def main() -> int:
     if args.cmd == "free":
         print(f"{free_gb():.1f}")
         return 0
+    if args.cmd == "desktop-gpu":
+        gpu = desktop_gpu_gb()
+        print("unknown" if gpu is None else f"{gpu:.1f}")
+        return 0
     if args.cmd == "wait":
-        wait_for_ram(args.need, args.label, args.steady)
+        wait_for_ram(args.need, args.label, args.steady, max_desktop_gpu_gb=args.max_desktop_gpu)
         return 0
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         ap.error("run needs a command after --")
     progress = (lambda: len(glob.glob(args.progress_glob))) if args.progress_glob else None
     try:
-        run(command, args.need, args.label, args.steady, args.low_gb, args.kill_below, progress)
+        run(command, args.need, args.label, args.steady, args.low_gb, args.kill_below, progress,
+            args.max_desktop_gpu)
     except RuntimeError as err:
         log.error("%s", err)
         return 1
