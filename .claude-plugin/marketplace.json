@@ -1,0 +1,15 @@
+{
+  "name": "ram-gate",
+  "owner": {
+    "name": "local"
+  },
+  "plugins": [
+    {
+      "name": "ram-gate",
+      "source": "./",
+      "description": "Run RAM-heavy local jobs only while the PC has memory to spare: wait for free RAM, pause when the user opens an app, resume when it closes.",
+      "version": "0.1.0",
+      "license": "MIT"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "ram-gate",
+  "version": "0.1.0",
+  "description": "Run RAM-heavy local jobs only while the PC has memory to spare: wait for free RAM, pause when the user opens an app, resume when it closes.",
+  "license": "MIT"
+}
