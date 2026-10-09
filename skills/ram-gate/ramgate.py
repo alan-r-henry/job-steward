@@ -232,7 +232,9 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
         done.set()
         watcher.join()
         if code == 0 and not killed.is_set():
-            status(f"{label}: DONE")
+            # the lowest point is what --need must cover (plus headroom)
+            log.info("%s: done; lowest free RAM while it ran was %.1f GB", label, lowest[0])
+            status(f"{label}: DONE (lowest free RAM {lowest[0]:.1f} GB)")
             return
         ram_caused = code == PAUSED or killed.is_set() or lowest[0] <= low_gb
         if not ram_caused:

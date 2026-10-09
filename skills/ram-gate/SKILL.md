@@ -54,16 +54,17 @@ The tool is `ramgate.py` next to this file (standard library only, any Python 3)
 
 ## Choosing --need
 
-Measure, don't guess: log `ramgate.free_gb()` at load and per item, note the
-lowest value, and set `--need` to the job's drop plus about 2 GB of headroom
-for the user.
+Measure, don't guess: sample `ramgate.free_gb()` continuously (every ~0.5 s,
+in a thread) through load and through whole items, note the lowest value, and
+set `--need` to the job's drop plus about 2 GB of headroom for the user.
+Free RAM logged only between items misses the peak inside an item.
 
 Measured on the owner's PC (15.2 GB RAM, RX 9060 XT 16 GB; the GPU also drives
 the desktop and dwm normally holds 0.2-3 GB of VRAM):
 
 | job | start at (`--need`) | pause between items | hard stop | `--max-desktop-gpu` |
 |---|---|---|---|---|
-| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 5.0 GB (free RAM drops ~1 GB while painting when dwm holds 0.2 GB; with dwm at 8 GB it spilled ~3.5 GB and died, which `--max-desktop-gpu` now prevents) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
+| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (takes ~4.5 GB at the low point *inside* a picture, though free RAM logged *between* pictures looks only ~1 GB lower; starting at 5.0 hit 0.4 GB free) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
 | Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB | not needed (~4 GB VRAM) |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
