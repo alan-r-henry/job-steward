@@ -63,7 +63,7 @@ the desktop and dwm normally holds 0.2-3 GB of VRAM):
 
 | job | start at (`--need`) | pause between items | hard stop | `--max-desktop-gpu` |
 |---|---|---|---|---|
-| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (uses ~3.5 GB of RAM while painting; 4.5 failed twice on the first picture) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
+| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 5.0 GB (free RAM drops ~1 GB while painting when dwm holds 0.2 GB; with dwm at 8 GB it spilled ~3.5 GB and died, which `--max-desktop-gpu` now prevents) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
 | Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB | not needed (~4 GB VRAM) |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
