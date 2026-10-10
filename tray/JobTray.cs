@@ -90,6 +90,7 @@ namespace JobTray
     {
         public string File, Id, Title, Project, Session, State, Message, Unit, Log, Output, Tail, Count, Success;
         public string Parent;     // the main job this is a step (sub-job) of
+        public string Retry, RetryCwd;   // command line that runs the job again, and where
         public int Depth, Children;
         public double? Done, Total, Progress, EtaSeconds;
         public double Started, Updated, PidStarted;
@@ -130,6 +131,8 @@ namespace JobTray
             j.Count = Str(d, "count");
             j.Success = Str(d, "success");
             j.Parent = Str(d, "parent");
+            j.Retry = Str(d, "retry");
+            j.RetryCwd = Str(d, "retry_cwd");
             j.Done = Num(d, "done");
             j.Total = Num(d, "total");
             j.Progress = Num(d, "progress");
@@ -314,6 +317,7 @@ namespace JobTray
                 case "waiting": return Amber;
                 case "done": return Green;
                 case "failed": case "lost": return Red;
+                case "skipped": return Sub;
                 default: return Accent;
             }
         }
@@ -327,6 +331,7 @@ namespace JobTray
                 case "done": return "Done";
                 case "failed": return "Failed";
                 case "lost": return "Stopped unexpectedly";
+                case "skipped": return "Not run";
                 default: return "Running";
             }
         }
@@ -425,6 +430,13 @@ namespace JobTray
                 return ra != rb ? ra.CompareTo(rb) : b.Updated.CompareTo(a.Updated);
             });
             list = Nest(list);
+            // a step still waiting when its main job has ended will never run
+            foreach (var j in list)
+            {
+                if (!j.Active || j.Parent == null || j.Pid > 0) continue;
+                var p = list.FirstOrDefault(k => k.Id == j.Parent && k != j);
+                if (p != null && !p.Active) { j.Shown = "skipped"; j.Eta = null; }
+            }
             Notify(list);
             jobs = list;
             UpdateIcon();
@@ -531,6 +543,8 @@ namespace JobTray
                 if (j.Shown == "done") text = "Finished." + (j.ShownMessage != null ? " " + j.ShownMessage : "");
                 else if (j.Shown == "failed") text = "Failed. " + (j.ShownMessage ?? "See its log.");
                 else if (j.Shown == "lost") text = "Its process stopped without finishing. Last: " + (j.ShownMessage ?? "(no message)");
+                if (text != null && j.Problem && j.Retry != null)
+                    text = Trim(text, 200) + " Click here for Retry.";
                 if (text != null)
                     icon.ShowBalloonTip(8000, j.Title, Trim(text, 250), j.Shown == "done" ? ToolTipIcon.Info : ToolTipIcon.Warning);
             }
@@ -653,9 +667,37 @@ namespace JobTray
                         try { System.IO.File.Delete(j.File); } catch (Exception) { }
                     dirty = true;
                 };
+                popup.Retry += RetryJob;
             }
             popup.SetJobs(jobs);
             popup.ShowNear();
+        }
+
+        void RetryJob(Job job)
+        {
+            popup.Hide();
+            var answer = MessageBox.Show("Run \"" + job.Title + "\" again?\n\n" + job.Retry, "JobTray",
+                                         MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (answer != DialogResult.OK) return;
+            // clear the failed rows; the new run writes fresh ones
+            foreach (var j in jobs.Where(j => (j == job || j.Parent == job.Id) && !j.Active))
+                try { System.IO.File.Delete(j.File); } catch (Exception) { }
+            try
+            {
+                // through cmd so any command line works; no window, and not tied to
+                // this tray: it keeps running if the tray is closed
+                var psi = new ProcessStartInfo("cmd.exe", "/d /s /c \"" + job.Retry + "\"");
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                if (job.RetryCwd != null && Directory.Exists(job.RetryCwd)) psi.WorkingDirectory = job.RetryCwd;
+                Process.Start(psi).Dispose();
+                icon.ShowBalloonTip(5000, job.Title, "Started again.", ToolTipIcon.Info);
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show("Could not start it again:\n\n" + e.Message, "JobTray");
+            }
+            dirty = true;
         }
 
         void ClearFinished()
@@ -681,6 +723,7 @@ namespace JobTray
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
         public event Action<Job> Dismiss;
+        public event Action<Job> Retry;
         public DateTime HiddenAt = DateTime.MinValue;
         List<Job> jobs = new List<Job>();
         readonly List<KeyValuePair<Rectangle, Action>> links = new List<KeyValuePair<Rectangle, Action>>();
@@ -883,6 +926,10 @@ namespace JobTray
             who.Add("updated " + Util.Ago(now - j.Updated));
             int right = x + width;
             var actions = new List<KeyValuePair<string, Action>>();
+            // a failed job that knows its command can run it again. A failed step
+            // (sub-job) usually fails its main job too, and that row has the button.
+            if (j.Problem && j.Retry != null)
+                actions.Add(new KeyValuePair<string, Action>("Retry", () => { if (Retry != null) Retry(j); }));
             if (!j.Active || j.Shown == "lost")
                 actions.Add(new KeyValuePair<string, Action>("Dismiss", () => { if (Dismiss != null) Dismiss(j); }));
             if (j.Output != null && j.Shown == "done") actions.Add(new KeyValuePair<string, Action>("Open result", () => Util.Open(j.Output)));
@@ -891,9 +938,19 @@ namespace JobTray
             {
                 var sz = TextRenderer.MeasureText(a.Key, smallFont);
                 var rect = new Rectangle(right - sz.Width, y + P(2), sz.Width, sz.Height);
-                TextRenderer.DrawText(g, a.Key, smallFont, rect.Location, t.Accent, TextFormatFlags.NoPrefix);
+                if (a.Key.StartsWith("Retry"))
+                {
+                    // a real button, not a link: it's the thing to do on a failed row
+                    rect = new Rectangle(right - sz.Width - P(16), y - P(2), sz.Width + P(16), sz.Height + P(6));
+                    using (var path = Round(rect, P(5)))
+                    using (var b = new SolidBrush(t.Accent)) g.FillPath(b, path);
+                    TextRenderer.DrawText(g, a.Key, smallFont, rect, t.Card,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
+                else
+                    TextRenderer.DrawText(g, a.Key, smallFont, rect.Location, t.Accent, TextFormatFlags.NoPrefix);
                 links.Add(new KeyValuePair<Rectangle, Action>(rect, a.Value));
-                right -= sz.Width + P(12);
+                right -= rect.Width + P(12);
             }
             Draw(g, string.Join("  ·  ", who), smallFont, t.Sub, x, y + P(2), right - x - P(4));
         }

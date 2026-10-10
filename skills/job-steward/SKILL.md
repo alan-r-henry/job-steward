@@ -51,6 +51,10 @@ In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
   card with its sub-jobs nested inside. Anything reported from inside a
   `jobstatus.py run` wrapper (ram-gate rows included) becomes its sub-job by
   itself (via `JOB_STATUS_PARENT`); otherwise pass `--parent <main id>`.
+- **Retry**: a failed or stopped row gets a Retry button when the job has a
+  `retry` command line. `run` records its own; for anything else pass
+  `--retry "<command line>" --retry-cwd <folder>`. Make jobs resumable, so a
+  retry skips finished work.
 - **ids**: short and unique per job (`<project>-<step>`); reuse one to update it.
 - **title**: what the user would call it ("Moon video: painting"), not a command line.
 - **pid**: a process that lives for the *whole* job (a wrapper, the main

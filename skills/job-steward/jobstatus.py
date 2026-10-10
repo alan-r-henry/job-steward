@@ -38,6 +38,9 @@ Fields (all optional except id):
     success     a regex: if the pid is gone and the log's end matches, it finished
     parent      the id of the main job this is a step (sub-job) of; the tray
                 nests it inside that job's card
+    retry, retry_cwd          a command line (and folder) that runs the job
+                again: a failed row gets a Retry button. `run` records its own
+                invocation, so wrapped jobs can always be retried.
     started, updated          epoch seconds (written for you)
 
 Main jobs and sub-jobs: a main job is the whole piece of work the user asked
@@ -214,7 +217,8 @@ def _windows_path(path: str) -> str:
 
 def _fields(args: argparse.Namespace) -> dict[str, Any]:
     keys = ("title", "project", "session", "state", "done", "total", "unit", "progress", "message",
-            "eta_seconds", "pid", "log", "output", "tail", "count", "success", "parent")
+            "eta_seconds", "pid", "log", "output", "tail", "count", "success", "parent",
+            "retry", "retry_cwd")
     out = {k: getattr(args, k, None) for k in keys}
     for k in ("log", "output", "tail", "count"):
         if out[k]:
@@ -244,6 +248,9 @@ def main() -> int:
         p.add_argument("--project")
         p.add_argument("--session", help="which chat session or tool started it")
         p.add_argument("--parent", help="id of the main job this is a step of")
+        p.add_argument("--retry", help="command line that runs the job again (the tray's Retry "
+                                       "button); `run` records its own")
+        p.add_argument("--retry-cwd", help="folder to run --retry in")
         p.add_argument("--state", choices=STATES)
         p.add_argument("--done", type=float)
         p.add_argument("--total", type=float)
@@ -274,7 +281,11 @@ def main() -> int:
         command[0] = shutil.which(command[0]) or command[0]   # finds .cmd/.bat and PATHEXT too
         fields = _fields(args)
         fields.update(state="running", pid=os.getpid(), started=time.time(),
-                      project=fields["project"] or os.path.basename(os.getcwd()))
+                      project=fields["project"] or os.path.basename(os.getcwd()),
+                      # this very invocation, for the tray's Retry button
+                      retry=fields["retry"] or subprocess.list2cmdline(
+                          [sys.executable, os.path.abspath(__file__)] + sys.argv[1:]),
+                      retry_cwd=fields["retry_cwd"] or os.getcwd())
         clear(args.id)   # a fresh run, not the last one's leftovers
         report(args.id, **fields)
         # under pythonw (no console, e.g. started in the background) keep the

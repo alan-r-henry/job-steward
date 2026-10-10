@@ -78,6 +78,7 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 | `log`, `output` | files the list offers to open |
 | `eta_seconds` | time left, if the job knows better than the tray's estimate |
 | `parent` | the id of the main job this is a step (sub-job) of |
+| `retry`, `retry_cwd` | a command line (and folder) that runs the job again; a failed or stopped row gets a **Retry** button, which asks first and then runs it with no window. `jobstatus.py run` records its own. |
 | `project`, `session` | who started it |
 
 **Main jobs and sub-jobs.** A main job is the whole piece of work ("make the
