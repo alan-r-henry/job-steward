@@ -89,6 +89,8 @@ namespace JobTray
     class Job
     {
         public string File, Id, Title, Project, Session, State, Message, Unit, Log, Output, Tail, Count, Success;
+        public string Parent;     // the main job this is a step (sub-job) of
+        public int Depth, Children;
         public double? Done, Total, Progress, EtaSeconds;
         public double Started, Updated, PidStarted;
         public int Pid;
@@ -127,6 +129,7 @@ namespace JobTray
             j.Tail = Str(d, "tail");
             j.Count = Str(d, "count");
             j.Success = Str(d, "success");
+            j.Parent = Str(d, "parent");
             j.Done = Num(d, "done");
             j.Total = Num(d, "total");
             j.Progress = Num(d, "progress");
@@ -421,10 +424,34 @@ namespace JobTray
                 int ra = Rank(a), rb = Rank(b);
                 return ra != rb ? ra.CompareTo(rb) : b.Updated.CompareTo(a.Updated);
             });
+            list = Nest(list);
             Notify(list);
             jobs = list;
             UpdateIcon();
             if (popup != null && popup.Visible) popup.SetJobs(jobs);
+        }
+
+        // Main jobs in order, each followed by its sub-jobs (steps whose "parent"
+        // is its id). A sub-job whose main job isn't listed stands on its own.
+        static List<Job> Nest(List<Job> list)
+        {
+            var ids = new HashSet<string>(list.Select(j => j.Id));
+            var ordered = new List<Job>();
+            var placed = new HashSet<Job>();
+            Action<Job, int> add = null;
+            add = (j, depth) =>
+            {
+                if (!placed.Add(j)) return;
+                j.Depth = depth;
+                ordered.Add(j);
+                var kids = list.Where(k => k.Parent == j.Id && k != j).ToList();
+                j.Children = kids.Count;
+                foreach (var k in kids) if (depth < 3) add(k, depth + 1);
+            };
+            foreach (var j in list.Where(j => j.Parent == null || j.Parent == j.Id || !ids.Contains(j.Parent)))
+                add(j, 0);
+            foreach (var j in list) add(j, 0);   // anything left over (a loop of parents)
+            return ordered;
         }
 
         static int Rank(Job j)
@@ -517,7 +544,9 @@ namespace JobTray
         void UpdateIcon()
         {
             var problem = jobs.FirstOrDefault(j => j.Problem);
-            var main = jobs.FirstOrDefault(j => j.Shown == "running" || j.Shown == "starting")
+            // the ring follows a job with a count (usually a sub-job: the step under way)
+            var main = jobs.FirstOrDefault(j => j.Active && j.Fraction.HasValue)
+                       ?? jobs.FirstOrDefault(j => j.Shown == "running" || j.Shown == "starting")
                        ?? jobs.FirstOrDefault(j => j.Shown == "waiting");
             var done = jobs.FirstOrDefault(j => j.Shown == "done");
             string kind;
@@ -617,7 +646,13 @@ namespace JobTray
             if (popup == null)
             {
                 popup = new Popup();
-                popup.Dismiss += job => { try { System.IO.File.Delete(job.File); } catch (Exception) { } dirty = true; };
+                popup.Dismiss += job =>
+                {
+                    // a main job takes its finished sub-jobs with it
+                    foreach (var j in jobs.Where(j => j == job || j.Parent == job.Id && !j.Active))
+                        try { System.IO.File.Delete(j.File); } catch (Exception) { }
+                    dirty = true;
+                };
             }
             popup.SetJobs(jobs);
             popup.ShowNear();
@@ -711,7 +746,8 @@ namespace JobTray
             jobs = list;
             t = Theme.Get(Util.LightTheme("AppsUseLightTheme"));
             BackColor = t.Back;
-            int h = P(52) + jobs.Take(MaxRows).Sum(j => RowHeight(j) + P(8)) + P(jobs.Count > MaxRows ? 28 : 6);
+            var cards = Cards();
+            int h = P(52) + cards.Take(MaxRows).Sum(c => c.Sum(j => RowHeight(j)) + P(8)) + P(cards.Count > MaxRows ? 28 : 6);
             if (jobs.Count == 0) h = P(52 + 70);
             int w = P(400);
             if (Width != w || Height != h)
@@ -751,16 +787,44 @@ namespace JobTray
                 Draw(g, "Long jobs started from any Claude session or script show up here.", smallFont, t.Sub, x, y + P(28), width);
                 return;
             }
-            foreach (var j in jobs.Take(MaxRows))
+            var cards = Cards();
+            foreach (var card in cards.Take(MaxRows))
             {
-                int h = RowHeight(j);
+                // one card per main job; its sub-jobs (steps) sit indented inside it
+                int h = card.Sum(j => RowHeight(j));
                 using (var path = Round(new Rectangle(x - P(4), y, width + P(8), h), P(8)))
                 using (var b = new SolidBrush(t.Card)) g.FillPath(b, path);
-                DrawJob(g, j, x + P(8), y + P(10), width - P(8), now);
-                y += h + P(8);
+                int top = y;
+                foreach (var j in card)
+                {
+                    int indent = P(18) * j.Depth;
+                    if (j.Depth > 0)
+                    {
+                        using (var p = new Pen(t.Track, P(2)))
+                        {
+                            g.DrawLine(p, x + indent - P(8), y + P(2), x + indent - P(8), y + RowHeight(j) - P(10));
+                            g.DrawLine(p, x + P(8), y - P(1), x + width - P(4), y - P(1));   // divider from the row above
+                        }
+                    }
+                    DrawJob(g, j, x + P(8) + indent, y + P(10), width - P(8) - indent, now);
+                    y += RowHeight(j);
+                }
+                y = top + h + P(8);
             }
-            if (jobs.Count > MaxRows)
-                Draw(g, "+" + (jobs.Count - MaxRows) + " more (Open status folder from the right-click menu)", smallFont, t.Sub, x, y, width);
+            if (cards.Count > MaxRows)
+                Draw(g, "+" + (cards.Count - MaxRows) + " more (Open status folder from the right-click menu)", smallFont, t.Sub, x, y, width);
+        }
+
+        // the flat, nested list cut into cards: a main job and the sub-jobs after it
+        List<List<Job>> Cards()
+        {
+            var cards = new List<List<Job>>();
+            foreach (var j in jobs)
+            {
+                if (j.Depth == 0 || cards.Count == 0) cards.Add(new List<Job>());
+                cards[cards.Count - 1].Add(j);
+            }
+            return cards;
         }
 
         void DrawJob(Graphics g, Job j, int x, int y, int width, double now)
@@ -812,7 +876,9 @@ namespace JobTray
 
             // footer: where it came from and how fresh, then links
             var who = new List<string>();
-            if (j.Project != null) who.Add(j.Project);
+            if (j.Depth > 0) who.Add("sub-job");
+            else if (j.Children > 0) who.Add("main job, " + j.Children + (j.Children == 1 ? " sub-job" : " sub-jobs"));
+            if (j.Project != null && j.Depth == 0) who.Add(j.Project);
             if (j.Session != null) who.Add(j.Session);
             who.Add("updated " + Util.Ago(now - j.Updated));
             int right = x + width;

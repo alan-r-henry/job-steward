@@ -77,7 +77,15 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 | `success` | a regex: if the pid is gone and the end of `log` matches it, the job counts as done |
 | `log`, `output` | files the list offers to open |
 | `eta_seconds` | time left, if the job knows better than the tray's estimate |
+| `parent` | the id of the main job this is a step (sub-job) of |
 | `project`, `session` | who started it |
+
+**Main jobs and sub-jobs.** A main job is the whole piece of work ("make the
+moon video"). A sub-job is one step inside it that reports its own progress
+("painting: 26 of 75 pictures"). Each main job is one card in the list, with
+its sub-jobs indented inside it. Jobs reported from inside a `jobstatus.py
+run` wrapper become its sub-jobs by themselves: the wrapper sets
+`JOB_STATUS_PARENT` for its command. Otherwise, set `parent`.
 
 Finished rows disappear after a day, and rows whose process died after three days.
 

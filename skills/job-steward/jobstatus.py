@@ -36,7 +36,15 @@ Fields (all optional except id):
                 ramgate's status file); "on hold" / "paused" in it reads as waiting
     count       a file pattern (one folder) the tray counts as `done`
     success     a regex: if the pid is gone and the log's end matches, it finished
+    parent      the id of the main job this is a step (sub-job) of; the tray
+                nests it inside that job's card
     started, updated          epoch seconds (written for you)
+
+Main jobs and sub-jobs: a main job is the whole piece of work the user asked
+for ("make the moon video"); a sub-job is one step inside it that reports its
+own progress ("painting: 26 of 75 pictures"). `run` sets JOB_STATUS_PARENT for
+its command, so any job reported from inside it (ramgate's, another `run`, a
+Job()) becomes its sub-job without being told.
 
 Standard library only.
 """
@@ -128,6 +136,10 @@ def report(job_id: str, **fields: Any) -> None:
         old = _read(path)
         is_new = old is None
         data = old or {"id": _slug(job_id), "started": time.time()}
+        # inside a `run` wrapper, a new job is a step of the wrapper's job
+        parent = os.environ.get("JOB_STATUS_PARENT")
+        if is_new and parent and _slug(parent) != _slug(job_id) and "parent" not in fields:
+            data["parent"] = _slug(parent)
         for key, value in fields.items():
             if value is not None:
                 data[key] = value
@@ -202,7 +214,7 @@ def _windows_path(path: str) -> str:
 
 def _fields(args: argparse.Namespace) -> dict[str, Any]:
     keys = ("title", "project", "session", "state", "done", "total", "unit", "progress", "message",
-            "eta_seconds", "pid", "log", "output", "tail", "count", "success")
+            "eta_seconds", "pid", "log", "output", "tail", "count", "success", "parent")
     out = {k: getattr(args, k, None) for k in keys}
     for k in ("log", "output", "tail", "count"):
         if out[k]:
@@ -231,6 +243,7 @@ def main() -> int:
         p.add_argument("--title")
         p.add_argument("--project")
         p.add_argument("--session", help="which chat session or tool started it")
+        p.add_argument("--parent", help="id of the main job this is a step of")
         p.add_argument("--state", choices=STATES)
         p.add_argument("--done", type=float)
         p.add_argument("--total", type=float)
@@ -268,7 +281,9 @@ def main() -> int:
         # command's console hidden too, instead of opening a window that can be closed
         hidden = sys.platform == "win32" and sys.stdout is None
         try:
-            code = subprocess.call(command, creationflags=0x08000000 if hidden else 0)
+            # jobs reported from inside the command become this job's sub-jobs
+            env = dict(os.environ, JOB_STATUS_PARENT=_slug(args.id))
+            code = subprocess.call(command, env=env, creationflags=0x08000000 if hidden else 0)
         except KeyboardInterrupt:
             report(args.id, state="failed", message="stopped by hand")
             return 130

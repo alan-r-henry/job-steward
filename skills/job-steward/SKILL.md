@@ -45,6 +45,12 @@ In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
 `job.update(done=26, message="...")`, `job.waiting(...)`, `job.finish(...)`,
 `job.fail(...)`, or `with jobstatus.Job(...) as job:` to finish or fail by itself.
 
+- **Main job and sub-jobs**: the main job is the whole piece of work the user
+  asked for ("make the moon video"); sub-jobs are its steps that report their
+  own progress ("painting: 26 of 75"). The tray shows each main job as one
+  card with its sub-jobs nested inside. Anything reported from inside a
+  `jobstatus.py run` wrapper (ram-gate rows included) becomes its sub-job by
+  itself (via `JOB_STATUS_PARENT`); otherwise pass `--parent <main id>`.
 - **ids**: short and unique per job (`<project>-<step>`); reuse one to update it.
 - **title**: what the user would call it ("Moon video: painting"), not a command line.
 - **pid**: a process that lives for the *whole* job (a wrapper, the main
