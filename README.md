@@ -1,49 +1,103 @@
-# ram-gate
+# job-steward
 
-A Claude Code skill and a small Python tool for running RAM-heavy local work,
-such as AI image, voice, music and video models, upscalers or renders, on a PC
-that someone is also using.
+A Claude Code skill, two small Python tools and a taskbar indicator for looking
+after long and heavy jobs on a PC that someone is also using.
+
+**See every job at a glance: JobTray.** A ring in the taskbar's notification
+area fills with the main job's progress. It turns amber while a job waits and
+red when one fails or its process dies without finishing. A click opens the
+list: each job's progress bar, count, time left, current step, and links to
+its log and result. A notification says when something finishes or fails. Any
+program, script or chat session can add a job by writing one small JSON file.
+The app uses about 25 MB of RAM and needs nothing installed.
+
+**Run RAM-heavy work only while there is memory to spare: ram-gate.**
 
 - **Waits** until free RAM has stayed above the job's need for a minute before starting.
 - **Pauses** when you open a browser or app. A cooperative worker saves and
   exits between items; any other tool can be stopped from outside before the
   PC freezes.
 - **Resumes** by itself when the memory is free again. The job skips what it already finished.
+- Every gated job shows up in JobTray by itself.
 
 ```bash
-python skills/ram-gate/ramgate.py free
-python skills/ram-gate/ramgate.py run --need 4.5 --label painter \
-    --progress-glob "out/*.png" -- python paint.py --out out
+# any long job: in the tray while it runs, then done or failed by its exit code
+python skills/job-steward/jobstatus.py run render --title "Episode 2: render" \
+    --count "out/*.mp4" --total 74 --unit scenes -- python render.py
+
+# a RAM-heavy job: waits for memory, pauses and resumes, and shows in the tray
+python skills/job-steward/ramgate.py run --need 4.5 --label painter \
+    --progress-glob "out/*.png" --total 40 -- python paint.py --out out
 ```
 
-What it is doing right now is always in one line of `~/ramgate-status.txt`:
+Standard library only. The Python tools run on Windows, Linux and macOS;
+JobTray is for Windows. See
+[`skills/job-steward/SKILL.md`](skills/job-steward/SKILL.md) for the rules
+Claude follows and the measured thresholds.
 
-```
-16:40:05 painter: ON HOLD, 3.2 of 4.5 GB RAM free; starts by itself when RAM is free
-16:41:12 painter: RUNNING since 16:41, 4.9 GB RAM free, 3 done
+## JobTray
+
+```bat
+tray\build.cmd                         &rem builds tray\bin\JobTray.exe with Windows' own C# compiler
+tray\bin\JobTray.exe --autostart on    &rem start it, and with Windows from now on
+tray\bin\JobTray.exe --show            &rem open the list of the copy already running
 ```
 
-Standard library only; Windows, Linux and macOS. See
-[`skills/ram-gate/SKILL.md`](skills/ram-gate/SKILL.md) for the rules Claude
-follows and the measured thresholds.
+Windows 11 puts new tray icons in the overflow (the ^ arrow). To keep the ring
+in view, drag it onto the taskbar, or turn it on under Settings > Personalization >
+Taskbar > Other system tray icons.
+
+Right-click the icon for: Clear finished, Open status folder, Start with Windows, Exit.
+
+### The job files
+
+One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
+`jobstatus.py` writes them for you; any language can write them directly
+(write a temporary file, then rename it over the old one):
+
+```json
+{
+  "id": "moon-painter", "title": "Moon video: painting", "project": "sleep-history",
+  "state": "running", "done": 26, "total": 75, "unit": "pictures",
+  "message": "painting the lift-off", "pid": 11024, "pid_started": 1791614433.07,
+  "log": "D:\\jobs\\moon\\make.log", "output": "D:\\jobs\\moon\\video.mp4",
+  "started": 1791610000, "updated": 1791614446
+}
+```
+
+| field | meaning |
+|---|---|
+| `state` | `starting`, `running`, `waiting`, `done` or `failed` |
+| `done`, `total`, `unit` | progress as a count; the tray estimates the time left from it |
+| `progress` | 0..1, when there is no count |
+| `message` | the current step |
+| `tail` | a file whose last line is shown as the message ("on hold" or "paused" in it reads as waiting) |
+| `count` | a file pattern in one folder, counted as `done` |
+| `pid`, `pid_started` | the process that lives for the whole job; if it is gone before `done`, the row turns red ("Stopped unexpectedly") |
+| `success` | a regex: if the pid is gone and the end of `log` matches it, the job counts as done |
+| `log`, `output` | files the list offers to open |
+| `eta_seconds` | time left, if the job knows better than the tray's estimate |
+| `project`, `session` | who started it |
+
+Finished rows disappear after a day, and rows whose process died after three days.
 
 ## Install
 
 As a plugin, in Claude Code:
 
 ```
-/plugin marketplace add alan-r-henry/ram-gate
-/plugin install ram-gate
+/plugin marketplace add alan-r-henry/job-steward
+/plugin install job-steward
 ```
 
 Or as a personal skill for every project on this machine:
 
 ```bash
-git clone https://github.com/alan-r-henry/ram-gate.git
-cp -r ram-gate/skills/ram-gate ~/.claude/skills/
+git clone https://github.com/alan-r-henry/job-steward.git
+cp -r job-steward/skills/job-steward ~/.claude/skills/
 ```
 
-## Worker protocol
+## Worker protocol (ram-gate)
 
 ```python
 import sys, ramgate
@@ -57,3 +111,10 @@ for item in todo:
 A stop with code 75, a failure while RAM was low, or a kill by `--kill-below`
 counts as a pause. Two pauses in a row that finish nothing count as a real
 failure, so a job that simply needs more memory than the machine has doesn't loop forever.
+
+What ram-gate is doing right now is also in one line of `~/ramgate-status.txt`:
+
+```
+16:40:05 painter: ON HOLD, 3.2 of 4.5 GB RAM free; starts by itself when RAM is free
+16:41:12 painter: RUNNING since 16:41, 4.9 GB RAM free, 3 done
+```

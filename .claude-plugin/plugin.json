@@ -1,6 +1,6 @@
 {
-  "name": "ram-gate",
-  "version": "0.1.0",
-  "description": "Run RAM-heavy local jobs only while the PC has memory to spare: wait for free RAM, pause when the user opens an app, resume when it closes.",
+  "name": "job-steward",
+  "version": "0.2.0",
+  "description": "Look after long and heavy jobs on your own PC: a taskbar indicator (JobTray) shows every job's progress and says when one finishes, fails or dies; RAM-heavy jobs wait for free memory, pause when you open an app and resume when it closes.",
   "license": "MIT"
 }
