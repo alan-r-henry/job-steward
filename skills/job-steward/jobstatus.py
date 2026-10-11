@@ -24,8 +24,9 @@ From any shell:
 
 Fields (all optional except id):
     title, project, session   what it is and who started it
-    state       starting | running | waiting | low_ram | done | failed
-                (low_ram: held until the PC has RAM to spare)
+    state       starting | running | queued | waiting | low_ram | done | failed
+                (queued: a later step, shown as "Up next"; low_ram: held until
+                the PC has RAM to spare)
     done, total, unit         progress as a count ("26 of 75 pictures")
     progress    0..1, when there is no count
     message     the current step, in plain words
@@ -65,7 +66,7 @@ import sys
 import time
 from typing import Any, Optional
 
-STATES = ("starting", "running", "waiting", "low_ram", "done", "failed")
+STATES = ("starting", "running", "queued", "waiting", "low_ram", "done", "failed")
 
 
 def folder() -> str:
@@ -194,6 +195,10 @@ class Job:
     def waiting(self, message: Optional[str] = None, **fields: Any) -> None:
         report(self.id, state="waiting", message=message, **fields)
 
+    def queued(self, message: Optional[str] = None, **fields: Any) -> None:
+        """A later step that hasn't started (shown as "Up next")."""
+        report(self.id, state="queued", message=message, **fields)
+
     def low_ram(self, message: Optional[str] = None, **fields: Any) -> None:
         """Held until the PC has RAM to spare (shown as "Waiting for RAM")."""
         report(self.id, state="low_ram", message=message, **fields)
@@ -223,7 +228,7 @@ def _windows_path(path: str) -> str:
 def _fields(args: argparse.Namespace) -> dict[str, Any]:
     keys = ("title", "project", "session", "state", "done", "total", "unit", "progress", "message",
             "eta_seconds", "pid", "log", "output", "tail", "count", "success", "parent",
-            "retry", "retry_cwd")
+            "retry", "retry_cwd", "order")
     out = {k: getattr(args, k, None) for k in keys}
     for k in ("log", "output", "tail", "count"):
         if out[k]:
@@ -253,6 +258,7 @@ def main() -> int:
         p.add_argument("--project")
         p.add_argument("--session", help="which chat session or tool started it")
         p.add_argument("--parent", help="id of the main job this is a step of")
+        p.add_argument("--order", type=float, help="position among its main job's steps")
         p.add_argument("--retry", help="command line that runs the job again (the tray's Retry "
                                        "button); `run` records its own")
         p.add_argument("--retry-cwd", help="folder to run --retry in")

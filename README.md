@@ -68,7 +68,7 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 
 | field | meaning |
 |---|---|
-| `state` | `starting`, `running`, `waiting` (queued or held), `low_ram` (held until the PC has RAM to spare; shown as **Waiting for RAM**), `done` or `failed` |
+| `state` | `starting`, `running`, `queued` (a later step that hasn't started; shown as **Up next**), `waiting` (held), `low_ram` (held until the PC has RAM to spare; shown as **Waiting for RAM**), `done` or `failed` |
 | `done`, `total`, `unit` | progress as a count; the tray estimates the time left from it |
 | `progress` | 0..1, when there is no count |
 | `message` | the current step |
@@ -79,6 +79,7 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 | `log`, `output` | files the list offers to open |
 | `eta_seconds` | time left, if the job knows better than the tray's estimate |
 | `parent` | the id of the main job this is a step (sub-job) of |
+| `order` | a step's position among its main job's steps (pipeline order); steps without one come after |
 | `retry`, `retry_cwd` | a command line (and folder) that runs the job again; a failed or stopped row gets a **Retry** button, which asks first and then runs it with no window. `jobstatus.py run` records its own. |
 | `project`, `session` | who started it |
 

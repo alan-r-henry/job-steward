@@ -52,6 +52,11 @@ In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
   card with its sub-jobs nested inside. Anything reported from inside a
   `jobstatus.py run` wrapper (ram-gate rows included) becomes its sub-job by
   itself (via `JOB_STATUS_PARENT`); otherwise pass `--parent <main id>`.
+- **Show what comes next**: when a multi-step job starts, list every step it
+  still has to do as `--state queued` ("Up next") with `--order <n>`, so the
+  user sees the whole plan, not only the step under way. Each step then
+  reports running (with its count where it has one) and done. A step still
+  queued when its main job ends shows as "Not run".
 - **Retry**: a failed or stopped row gets a Retry button when the job has a
   `retry` command line. `run` records its own; for anything else pass
   `--retry "<command line>" --retry-cwd <folder>`. Make jobs resumable, so a

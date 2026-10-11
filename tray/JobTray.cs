@@ -92,11 +92,11 @@ namespace JobTray
         public string Parent;     // the main job this is a step (sub-job) of
         public string Retry, RetryCwd;   // command line that runs the job again, and where
         public int Depth, Children;
-        public double? Done, Total, Progress, EtaSeconds;
+        public double? Done, Total, Progress, EtaSeconds, Order;
         public double Started, Updated, PidStarted;
         public int Pid;
         // worked out by the tray
-        public string Shown;      // starting, running, waiting, low_ram, done, failed, lost
+        public string Shown;      // starting, running, queued, waiting, low_ram, done, failed, lost
         public string ShownMessage;
         public double? Eta;
 
@@ -141,6 +141,7 @@ namespace JobTray
             j.Updated = Num(d, "updated") ?? Util.Epoch(System.IO.File.GetLastWriteTimeUtc(file));
             j.Pid = (int)(Num(d, "pid") ?? 0);
             j.PidStarted = Num(d, "pid_started") ?? 0;
+            j.Order = Num(d, "order");
             return j;
         }
 
@@ -162,7 +163,7 @@ namespace JobTray
 
         public bool Active { get { return Shown == "starting" || Shown == "running" || Waiting; } }
         // held for a reason: in the queue, or until the PC has RAM to spare
-        public bool Waiting { get { return Shown == "waiting" || Shown == "low_ram"; } }
+        public bool Waiting { get { return Shown == "waiting" || Shown == "low_ram" || Shown == "queued"; } }
         public bool Problem { get { return Shown == "failed" || Shown == "lost"; } }
 
         public double? Fraction
@@ -320,6 +321,7 @@ namespace JobTray
             {
                 case "waiting": return Amber;
                 case "low_ram": return Violet;
+                case "queued": return Sub;
                 case "done": return Green;
                 case "failed": case "lost": return Red;
                 case "skipped": return Sub;
@@ -334,6 +336,7 @@ namespace JobTray
                 case "starting": return "Starting";
                 case "waiting": return "Waiting";
                 case "low_ram": return "Waiting for RAM";
+                case "queued": return "Up next";
                 case "done": return "Done";
                 case "failed": return "Failed";
                 case "lost": return "Stopped unexpectedly";
@@ -470,7 +473,8 @@ namespace JobTray
                 if (!placed.Add(j)) return;
                 j.Depth = depth;
                 ordered.Add(j);
-                var kids = list.Where(k => k.Parent == j.Id && k != j).ToList();
+                var kids = list.Where(k => k.Parent == j.Id && k != j)
+                               .OrderBy(k => k.Order ?? double.MaxValue).ToList();   // stable: ties keep their order
                 j.Children = kids.Count;
                 foreach (var k in kids) if (depth < 3) add(k, depth + 1);
             };
@@ -487,7 +491,8 @@ namespace JobTray
                 case "lost": case "failed": return 0;
                 case "running": case "starting": return 1;
                 case "waiting": case "low_ram": return 2;
-                default: return 3;
+                case "queued": return 3;
+                default: return 4;
             }
         }
 
@@ -502,11 +507,12 @@ namespace JobTray
             j.ShownMessage = tail ?? j.Message;
 
             string st = j.State;
-            if (st == "queued" || st == "paused" || st == "hold" || st == "on hold") st = "waiting";
+            if (st == "paused" || st == "hold" || st == "on hold") st = "waiting";
+            else if (st == "up next" || st == "next" || st == "pending") st = "queued";
             else if (st == "low-ram" || st == "lowram" || st == "low ram" || st == "no_ram" || st == "ram") st = "low_ram";
             else if (st == "error") st = "failed";
             else if (st == "finished" || st == "complete" || st == "completed" || st == "success") st = "done";
-            else if (st != "starting" && st != "waiting" && st != "low_ram" && st != "done" && st != "failed") st = "running";
+            else if (st != "starting" && st != "queued" && st != "waiting" && st != "low_ram" && st != "done" && st != "failed") st = "running";
             bool active = st != "done" && st != "failed";
 
             if (active && j.Pid > 0 && !Util.Alive(j.Pid, j.PidStarted))
@@ -525,7 +531,7 @@ namespace JobTray
                 }
                 active = false;
             }
-            if (active && tail != null && Regex.IsMatch(tail, @"\b(on hold|paused|waiting|queued)\b", RegexOptions.IgnoreCase))
+            if (active && st != "queued" && tail != null && Regex.IsMatch(tail, @"\b(on hold|paused|waiting|queued)\b", RegexOptions.IgnoreCase))
                 st = "waiting";
             // waiting because the PC is short of memory (also from writers that only say "waiting")
             if (st == "waiting" && Regex.IsMatch(j.ShownMessage ?? "", @"\b(low RAM|RAM free|free RAM|out of RAM|not enough RAM|more RAM)\b", RegexOptions.IgnoreCase))
@@ -584,7 +590,7 @@ namespace JobTray
             string kind;
             double? frac = null;
             if (problem != null) kind = "problem";
-            else if (main != null) { kind = main.Waiting ? main.Shown : "running"; frac = main.Fraction; }
+            else if (main != null) { kind = main.Waiting ? (main.Shown == "low_ram" ? "low_ram" : "waiting") : "running"; frac = main.Fraction; }
             else if (done != null) kind = "done";
             else kind = "idle";
 
