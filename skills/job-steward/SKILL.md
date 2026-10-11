@@ -135,7 +135,7 @@ the desktop and dwm normally holds 0.2-3 GB of VRAM):
 
 | job | start at (`--need`) | pause between items | hard stop | `--max-desktop-gpu` |
 |---|---|---|---|---|
-| Z-Image-Turbo painter (fp8, 1344x768), batches of 6 per process | 6.5 GB (takes ~4.5 GB at the low point *inside* a picture, though free RAM logged *between* pictures looks only ~1 GB lower; starting at 5.0 hit 0.4 GB free) | 2.8 GB | 2.0 GB | 4 GB (VRAM peak ~11 GB) |
+| Z-Image-Turbo painter (fp8, 1344x768, memory-efficient attention), batches of 20 per process | 4.0 GB (takes ~1.4 GB at the low point; before efficient attention it took ~4.5 GB and needed 6.5) | 2.8 GB | 2.0 GB | 7 GB (VRAM peak ~7.5 GB) |
 | Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB | not needed (~4 GB VRAM) |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
@@ -155,6 +155,19 @@ VRAM peak, minus ~1 GB): the gate also holds while dwm holds more than that,
 and the status file says so. `python ramgate.py desktop-gpu` prints it. When a
 job is held for this, ask the user to sign out or restart the PC; don't do it
 for them.
+
+### GPU memory that lands in system RAM
+
+On Windows, when a job's GPU memory gets tight the graphics driver quietly
+moves part of it into system RAM. It shows up in no process's memory, only as
+free RAM falling, and comes back when the job frees it. On the owner's PC the
+painter's attention step built the whole attention matrix (PyTorch's fallback,
+because memory-efficient attention is switched off as "experimental" on AMD),
+and ~2.3 GB went to system RAM during every picture. Setting
+`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` cut the job's RAM use from ~4.5 to
+~1.4 GB and made it ~10x faster, with the same pictures. When free RAM falls
+while a GPU job's own working set doesn't grow, look for big GPU temporaries
+(attention, unfused ops) before anything else.
 
 ### Memory-mapped weights
 
