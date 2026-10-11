@@ -4,8 +4,9 @@ A Claude Code skill, two small Python tools and a taskbar indicator for looking
 after long and heavy jobs on a PC that someone is also using.
 
 **See every job at a glance: JobTray.** A ring in the taskbar's notification
-area fills with the main job's progress. It turns amber while a job waits and
-red when one fails or its process dies without finishing. A click opens the
+area fills with the main job's progress. It turns amber while a job waits,
+purple while it waits for free RAM, and red when one fails or its process
+dies without finishing. A click opens the
 list: each job's progress bar, count, time left, current step, and links to
 its log and result. A notification says when something finishes or fails. Any
 program, script or chat session can add a job by writing one small JSON file.
@@ -67,7 +68,7 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 
 | field | meaning |
 |---|---|
-| `state` | `starting`, `running`, `waiting`, `done` or `failed` |
+| `state` | `starting`, `running`, `waiting` (queued or held), `low_ram` (held until the PC has RAM to spare; shown as **Waiting for RAM**), `done` or `failed` |
 | `done`, `total`, `unit` | progress as a count; the tray estimates the time left from it |
 | `progress` | 0..1, when there is no count |
 | `message` | the current step |

@@ -24,7 +24,8 @@ Two tools, next to this file, standard library only:
 ## Show every long job in the tray
 
 The user can't watch a terminal or this chat all day; the tray icon (a ring
-that fills with the main job's progress, amber while waiting, red when
+that fills with the main job's progress, amber while waiting, purple while
+waiting for free RAM, red when
 something failed or died) is how they follow work. So whenever you start
 anything that runs longer than about a minute, in the background or detached,
 put it in the list, from any chat session, in any project:
@@ -42,7 +43,7 @@ python <this skill>/jobstatus.py done moon --message "uploaded"   # also: fail, 
 ```
 
 In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
-`job.update(done=26, message="...")`, `job.waiting(...)`, `job.finish(...)`,
+`job.update(done=26, message="...")`, `job.waiting(...)`, `job.low_ram(...)`, `job.finish(...)`,
 `job.fail(...)`, or `with jobstatus.Job(...) as job:` to finish or fail by itself.
 
 - **Main job and sub-jobs**: the main job is the whole piece of work the user
@@ -62,6 +63,10 @@ In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
   as stopped unexpectedly. `run` and `Job()` record their own process.
 - **message**: the current step in plain words; or `--tail <file>` to show a
   log's last line. Text with "on hold", "paused" or "waiting" shows as waiting.
+- **Waiting for RAM** (`--state low_ram`, purple): use it whenever a job is held
+  because the PC is short of memory, so the user can tell it apart from a job
+  that is only queued. ram-gate reports it by itself; a waiting message that
+  mentions "low RAM" or "RAM free" also shows as Waiting for RAM.
 - **count/total/unit** give the bar and an ETA; `--progress 0.4` when there's no count.
 - **output**: the result (a video, a folder); the tray offers to open it when done.
 - **session**: optional, which chat or tool started it, when several run at once.

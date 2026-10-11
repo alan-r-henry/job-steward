@@ -86,7 +86,8 @@ def status(label: str, state: str, text: str, done: Optional[int] = None,
            total: Optional[int] = None, job_id: Optional[str] = None) -> None:
     """Replace the one-line status file and update the tray; never break the job.
 
-    state is the tray's: starting, running, waiting, done or failed.
+    state is the tray's: starting, running, waiting, low_ram (held until RAM is
+    free), done or failed.
     """
     try:
         tmp = STATUS_PATH + ".tmp"
@@ -211,11 +212,11 @@ def wait_for_ram(need_gb: float, label: str = "job", steady_s: float = 60,
                     log.info("%s: RAM is free again (%.1f GB), starting", label, free)
                 status(label, "starting", f"STARTING, {free:.1f} GB RAM free", job_id=job_id)
                 return
-            status(label, "waiting", f"RAM is free ({free:.1f} GB), starting in {left:.0f} s "
+            status(label, "starting", f"RAM is free ({free:.1f} GB), starting in {left:.0f} s "
                    f"if it stays free", job_id=job_id)
         else:
             since = None
-            status(label, "waiting", f"ON HOLD, {free:.1f} of {need_gb:.1f} GB RAM free; "
+            status(label, "low_ram", f"ON HOLD, {free:.1f} of {need_gb:.1f} GB RAM free; "
                    f"starts by itself when RAM is free", job_id=job_id)
             if not held:
                 log.info("%s: on hold, %.1f GB RAM free and it needs %.1f GB; it starts by "
@@ -324,7 +325,7 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
         wait_next = need_gb + stalls * step_gb
         log.info("%s: paused for low RAM (lowest %.1f GB free); resumes when %.1f GB is free",
                  label, lowest[0], wait_next)
-        status(label, "waiting", f"PAUSED for low RAM; resumes by itself when {wait_next:.1f} GB "
+        status(label, "low_ram", f"PAUSED for low RAM; resumes by itself when {wait_next:.1f} GB "
                "is free" + (" (more than before: the PC is busier)" if stalls else ""),
                done=count(), job_id=job_id)
 

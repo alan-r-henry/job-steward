@@ -24,7 +24,8 @@ From any shell:
 
 Fields (all optional except id):
     title, project, session   what it is and who started it
-    state       starting | running | waiting | done | failed
+    state       starting | running | waiting | low_ram | done | failed
+                (low_ram: held until the PC has RAM to spare)
     done, total, unit         progress as a count ("26 of 75 pictures")
     progress    0..1, when there is no count
     message     the current step, in plain words
@@ -64,7 +65,7 @@ import sys
 import time
 from typing import Any, Optional
 
-STATES = ("starting", "running", "waiting", "done", "failed")
+STATES = ("starting", "running", "waiting", "low_ram", "done", "failed")
 
 
 def folder() -> str:
@@ -192,6 +193,10 @@ class Job:
 
     def waiting(self, message: Optional[str] = None, **fields: Any) -> None:
         report(self.id, state="waiting", message=message, **fields)
+
+    def low_ram(self, message: Optional[str] = None, **fields: Any) -> None:
+        """Held until the PC has RAM to spare (shown as "Waiting for RAM")."""
+        report(self.id, state="low_ram", message=message, **fields)
 
     def finish(self, message: Optional[str] = None, **fields: Any) -> None:
         report(self.id, state="done", message=message, **fields)

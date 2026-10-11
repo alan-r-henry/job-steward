@@ -96,7 +96,7 @@ namespace JobTray
         public double Started, Updated, PidStarted;
         public int Pid;
         // worked out by the tray
-        public string Shown;      // starting, running, waiting, done, failed, lost
+        public string Shown;      // starting, running, waiting, low_ram, done, failed, lost
         public string ShownMessage;
         public double? Eta;
 
@@ -160,7 +160,9 @@ namespace JobTray
             catch (Exception) { return null; }
         }
 
-        public bool Active { get { return Shown == "starting" || Shown == "running" || Shown == "waiting"; } }
+        public bool Active { get { return Shown == "starting" || Shown == "running" || Waiting; } }
+        // held for a reason: in the queue, or until the PC has RAM to spare
+        public bool Waiting { get { return Shown == "waiting" || Shown == "low_ram"; } }
         public bool Problem { get { return Shown == "failed" || Shown == "lost"; } }
 
         public double? Fraction
@@ -288,7 +290,7 @@ namespace JobTray
 
     class Theme
     {
-        public Color Back, Card, Text, Sub, Track, Accent, Amber, Red, Green;
+        public Color Back, Card, Text, Sub, Track, Accent, Amber, Red, Green, Violet;
 
         public static Theme Get(bool light)
         {
@@ -299,6 +301,7 @@ namespace JobTray
                 t.Sub = Color.FromArgb(96, 96, 96); t.Track = Color.FromArgb(220, 220, 220);
                 t.Accent = Color.FromArgb(0, 103, 192); t.Amber = Color.FromArgb(157, 93, 0);
                 t.Red = Color.FromArgb(196, 43, 28); t.Green = Color.FromArgb(15, 123, 15);
+                t.Violet = Color.FromArgb(136, 62, 196);
             }
             else
             {
@@ -306,6 +309,7 @@ namespace JobTray
                 t.Sub = Color.FromArgb(170, 170, 170); t.Track = Color.FromArgb(70, 70, 70);
                 t.Accent = Color.FromArgb(76, 194, 255); t.Amber = Color.FromArgb(252, 185, 0);
                 t.Red = Color.FromArgb(255, 110, 100); t.Green = Color.FromArgb(108, 203, 95);
+                t.Violet = Color.FromArgb(196, 150, 255);
             }
             return t;
         }
@@ -315,6 +319,7 @@ namespace JobTray
             switch (shown)
             {
                 case "waiting": return Amber;
+                case "low_ram": return Violet;
                 case "done": return Green;
                 case "failed": case "lost": return Red;
                 case "skipped": return Sub;
@@ -328,6 +333,7 @@ namespace JobTray
             {
                 case "starting": return "Starting";
                 case "waiting": return "Waiting";
+                case "low_ram": return "Waiting for RAM";
                 case "done": return "Done";
                 case "failed": return "Failed";
                 case "lost": return "Stopped unexpectedly";
@@ -430,6 +436,14 @@ namespace JobTray
                 return ra != rb ? ra.CompareTo(rb) : b.Updated.CompareTo(a.Updated);
             });
             list = Nest(list);
+            // a main job whose live steps are only held for RAM says so too
+            foreach (var j in list)
+            {
+                if (j.Shown != "running" || j.Children == 0) continue;
+                var steps = list.Where(k => k.Parent == j.Id && k != j && k.Active).ToList();
+                if (steps.Any(k => k.Shown == "low_ram") && !steps.Any(k => k.Shown == "running" || k.Shown == "starting"))
+                    j.Shown = "low_ram";
+            }
             // a step still waiting when its main job has ended will never run
             foreach (var j in list)
             {
@@ -472,7 +486,7 @@ namespace JobTray
             {
                 case "lost": case "failed": return 0;
                 case "running": case "starting": return 1;
-                case "waiting": return 2;
+                case "waiting": case "low_ram": return 2;
                 default: return 3;
             }
         }
@@ -489,9 +503,10 @@ namespace JobTray
 
             string st = j.State;
             if (st == "queued" || st == "paused" || st == "hold" || st == "on hold") st = "waiting";
+            else if (st == "low-ram" || st == "lowram" || st == "low ram" || st == "no_ram" || st == "ram") st = "low_ram";
             else if (st == "error") st = "failed";
             else if (st == "finished" || st == "complete" || st == "completed" || st == "success") st = "done";
-            else if (st != "starting" && st != "waiting" && st != "done" && st != "failed") st = "running";
+            else if (st != "starting" && st != "waiting" && st != "low_ram" && st != "done" && st != "failed") st = "running";
             bool active = st != "done" && st != "failed";
 
             if (active && j.Pid > 0 && !Util.Alive(j.Pid, j.PidStarted))
@@ -512,6 +527,9 @@ namespace JobTray
             }
             if (active && tail != null && Regex.IsMatch(tail, @"\b(on hold|paused|waiting|queued)\b", RegexOptions.IgnoreCase))
                 st = "waiting";
+            // waiting because the PC is short of memory (also from writers that only say "waiting")
+            if (st == "waiting" && Regex.IsMatch(j.ShownMessage ?? "", @"\b(low RAM|RAM free|free RAM|out of RAM|not enough RAM|more RAM)\b", RegexOptions.IgnoreCase))
+                st = "low_ram";
             j.Shown = st;
 
             j.Eta = null;
@@ -561,12 +579,12 @@ namespace JobTray
             // the ring follows a job with a count (usually a sub-job: the step under way)
             var main = jobs.FirstOrDefault(j => j.Active && j.Fraction.HasValue)
                        ?? jobs.FirstOrDefault(j => j.Shown == "running" || j.Shown == "starting")
-                       ?? jobs.FirstOrDefault(j => j.Shown == "waiting");
+                       ?? jobs.FirstOrDefault(j => j.Waiting);
             var done = jobs.FirstOrDefault(j => j.Shown == "done");
             string kind;
             double? frac = null;
             if (problem != null) kind = "problem";
-            else if (main != null) { kind = main.Shown == "waiting" ? "waiting" : "running"; frac = main.Fraction; }
+            else if (main != null) { kind = main.Waiting ? main.Shown : "running"; frac = main.Fraction; }
             else if (done != null) kind = "done";
             else kind = "idle";
 
@@ -631,7 +649,7 @@ namespace JobTray
             }
             using (var p = new Pen(track, w)) g.DrawEllipse(p, r);
             if (kind == "idle") return;
-            using (var p = new Pen(kind == "waiting" ? t.Amber : t.Accent, w))
+            using (var p = new Pen(kind == "waiting" ? t.Amber : kind == "low_ram" ? t.Violet : t.Accent, w))
             {
                 p.StartCap = p.EndCap = LineCap.Round;
                 if (frac.HasValue) g.DrawArc(p, r, -90, (float)Math.Max(12, 360 * frac.Value));
@@ -905,7 +923,7 @@ namespace JobTray
                 detail.Add(Util.Num(j.Done.Value) + (j.Unit != null ? " " + j.Unit : "") + " done");
             if (f.HasValue) detail.Add((int)Math.Round(f.Value * 100) + "%");
             if (j.Eta.HasValue) detail.Add("about " + Util.Duration(j.Eta.Value) + " left");
-            if (j.Active && j.Started > 0) detail.Add((j.Shown == "waiting" ? "started " : "running ") + Util.Duration(now - j.Started) + (j.Shown == "waiting" ? " ago" : ""));
+            if (j.Active && j.Started > 0) detail.Add((j.Waiting ? "started " : "running ") + Util.Duration(now - j.Started) + (j.Waiting ? " ago" : ""));
             if (j.Shown == "lost") detail.Add("its process is gone; check the log");
             if (detail.Count == 0) detail.Add(Theme.Label(j.Shown));
             Draw(g, string.Join("  ·  ", detail), bodyFont, t.Text, x, y, width);
