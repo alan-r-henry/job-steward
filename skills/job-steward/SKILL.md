@@ -146,6 +146,7 @@ the desktop and dwm normally holds 0.2-3 GB of VRAM):
 | job | start at (`--need`) | pause between items | hard stop | `--max-desktop-gpu` |
 |---|---|---|---|---|
 | Z-Image-Turbo painter (fp8, 1344x768, memory-efficient attention), batches of 20 per process | 4.0 GB (takes ~1.4 GB at the low point; before efficient attention it took ~4.5 GB and needed 6.5) | 2.8 GB | 2.0 GB | 7 GB (VRAM peak ~7.5 GB) |
+| ACE-Step 1.5 music (bf16, weights loaded straight to the GPU), 4-min tracks | 4.0 GB (takes ~1.5 GB; with ACE-Step's float32 default on AMD it filled 13.8 GB of VRAM, spilled into RAM and needed 6.5+) | n/a | 2.0 GB | 6 GB (VRAM peak ~9 GB) |
 | Qwen3-TTS 1.7B (plain-read loader) | 4.0 GB (load drops ~1.5 GB) | 2.5 GB | 1.5 GB | not needed (~4 GB VRAM) |
 
 Typical users of RAM: Brave/Chrome 1.3-2 GB, Claude desktop ~2.5 GB, Riot
@@ -178,6 +179,17 @@ and ~2.3 GB went to system RAM during every picture. Setting
 ~1.4 GB and made it ~10x faster, with the same pictures. When free RAM falls
 while a GPU job's own working set doesn't grow, look for big GPU temporaries
 (attention, unfused ops) before anything else.
+
+Also check the model's precision: some tools fall back to float32 on AMD
+(ACE-Step does unless `ACESTEP_ROCM_DTYPE=bfloat16`), which doubles the
+model's graphics memory and pushes the rest into RAM. To see the spill as it
+happens, sample `\GPU Process Memory(pid_<pid>_*)\Shared Usage` (typeperf)
+next to free RAM: shared usage is system RAM the driver uses for the job.
+
+And check how the weights load: `from_pretrained` builds the whole model in
+RAM before `.to("cuda")`. Build it on the meta device and put each tensor on
+the GPU as it is read (sleep-history's tools/ace_gen.py patches
+`AutoModel.from_pretrained` this way).
 
 ### Memory-mapped weights
 
