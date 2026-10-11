@@ -34,8 +34,11 @@ is free" or "... RUNNING since 16:26, 4.9 GB free, 3 done". It is
 ~/ramgate-status.txt unless --status or the RAMGATE_STATUS variable says
 otherwise.
 
-Two low-RAM stops in a row that finish nothing count as a real failure (the job
-needs more memory than the machine has free), and ramgate exits non-zero.
+A low-RAM stop that finishes nothing means the PC is busier than --need
+allowed for, so the next start waits for --step-gb more free RAM (6.5, then
+7.5, then 8.5 GB ...) instead of giving up; progress resets it. Only when that
+would pass --max-need (default 75% of installed RAM) does ramgate fail, since
+the job then needs more memory than the machine can free.
 Progress is measured with --progress-glob (count of files matching it).
 
 As a library:  import ramgate;  ramgate.wait_for_ram(4.5);  ramgate.run([...], 4.5)
@@ -124,6 +127,26 @@ def free_gb() -> float:
     pages = sum(int(re.search(rf"{key}:\s+(\d+)", out).group(1))
                 for key in ("Pages free", "Pages inactive", "Pages speculative"))
     return pages * page / 2**30
+
+
+def total_gb() -> float:
+    """Installed physical memory in GB."""
+    if sys.platform == "win32":
+        import ctypes
+
+        class Kb(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong)] + [
+                (f"x{i}", ctypes.c_ulonglong) for i in range(6)]
+
+        kb = Kb(dwLength=ctypes.sizeof(Kb))
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(kb))
+        return kb.ullTotalPhys / 2**30
+    if os.path.exists("/proc/meminfo"):
+        with open("/proc/meminfo") as f:
+            return int(f.readline().split()[1]) / 2**20
+    out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout
+    return int(out) / 2**30
 
 
 def low(below_gb: float) -> bool:
@@ -216,8 +239,14 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
         low_gb: Optional[float] = None, kill_below_gb: Optional[float] = None,
         progress: Optional[Callable[[], int]] = None,
         max_desktop_gpu_gb: Optional[float] = None, total: Optional[int] = None,
-        job_id: Optional[str] = None) -> None:
+        job_id: Optional[str] = None, step_gb: float = 1.0,
+        max_need_gb: Optional[float] = None) -> None:
     """Run cmd when RAM allows; after a low-RAM stop, wait for RAM and run it again.
+
+    Each low-RAM stop that finishes nothing raises the free RAM the next start
+    waits for by step_gb (the PC is busier than need_gb allowed for, so it waits
+    for more room instead of failing); progress resets it to need_gb. Only when
+    that would pass max_need_gb (default 75% of installed RAM) does the job fail.
 
     low_gb: a failure while free RAM fell to or under this counts as caused by
     other apps (default: 55% of need_gb). kill_below_gb: kill the command (and
@@ -232,9 +261,11 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
     if total is not None:
         status(label, "waiting", "queued", done=count(), total=total, job_id=job_id)
     low_gb = need_gb * 0.55 if low_gb is None else low_gb
+    max_need_gb = max(need_gb, total_gb() * 0.75 if max_need_gb is None else max_need_gb)
     stalls = 0
     while True:
-        wait_for_ram(need_gb, label, steady_s, max_desktop_gpu_gb=max_desktop_gpu_gb,
+        need_now = need_gb + stalls * step_gb
+        wait_for_ram(need_now, label, steady_s, max_desktop_gpu_gb=max_desktop_gpu_gb,
                      job_id=job_id)
         before = progress() if progress else 0
         lowest = [free_gb()]
@@ -284,14 +315,17 @@ def run(cmd: Sequence[str], need_gb: float, label: str = "job", steady_s: float 
                                f"{lowest[0]:.1f} GB, so not a memory pause")
         made = (progress() if progress else 1) - before
         stalls = 0 if made > 0 else stalls + 1
-        if stalls >= 2:
-            status(label, "failed", "FAILED, it keeps running out of RAM without finishing "
-                   "anything", job_id=job_id)
-            raise RuntimeError(f"{label} stopped twice for low RAM without finishing anything; "
-                               "it may need more memory than this machine has free")
-        log.info("%s: paused for low RAM (lowest %.1f GB free); waiting to resume", label,
-                 lowest[0])
-        status(label, "waiting", "PAUSED for low RAM; resumes by itself when RAM is free",
+        if need_gb + stalls * step_gb > max_need_gb:
+            status(label, "failed", f"FAILED, it ran out of RAM even when started with "
+                   f"{need_now:.1f} GB free", job_id=job_id)
+            raise RuntimeError(f"{label} kept stopping for low RAM without finishing anything, "
+                               f"even when started with {need_now:.1f} GB free; it may need "
+                               "more memory than this machine can free")
+        wait_next = need_gb + stalls * step_gb
+        log.info("%s: paused for low RAM (lowest %.1f GB free); resumes when %.1f GB is free",
+                 label, lowest[0], wait_next)
+        status(label, "waiting", f"PAUSED for low RAM; resumes by itself when {wait_next:.1f} GB "
+               "is free" + (" (more than before: the PC is busier)" if stalls else ""),
                done=count(), job_id=job_id)
 
 
@@ -317,6 +351,12 @@ def main() -> int:
     r.add_argument("--kill-below", type=float, help="kill the command if free RAM falls under this")
     r.add_argument("--progress-glob", help="files counted as finished items, e.g. 'out/*.png'")
     r.add_argument("--total", type=int, help="how many items --progress-glob counts up to")
+    r.add_argument("--step-gb", type=float, default=1.0,
+                   help="after a low-RAM stop that finished nothing, wait for this much more "
+                        "free RAM next time (default 1)")
+    r.add_argument("--max-need", type=float,
+                   help="give up rather than wait for more free RAM than this "
+                        "(default 75%% of installed RAM)")
     r.add_argument("command", nargs=argparse.REMAINDER)
     for parser in (w, r):
         parser.add_argument("--status", help=f"one-line status file (default {STATUS_PATH})")
@@ -345,7 +385,7 @@ def main() -> int:
     progress = (lambda: len(glob.glob(args.progress_glob))) if args.progress_glob else None
     try:
         run(command, args.need, args.label, args.steady, args.low_gb, args.kill_below, progress,
-            args.max_desktop_gpu, args.total, args.job_id)
+            args.max_desktop_gpu, args.total, args.job_id, args.step_gb, args.max_need)
     except RuntimeError as err:
         log.error("%s", err)
         return 1

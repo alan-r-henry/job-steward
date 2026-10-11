@@ -118,8 +118,12 @@ for item in todo:
 ```
 
 A stop with code 75, a failure while RAM was low, or a kill by `--kill-below`
-counts as a pause. Two pauses in a row that finish nothing count as a real
-failure, so a job that simply needs more memory than the machine has doesn't loop forever.
+counts as a pause. A pause that finished nothing means the PC is busier than
+`--need` allowed for, so the next start waits for `--step-gb` (1 GB) more free
+RAM: 6.5, then 7.5, then 8.5 GB. The job waits for you to free memory instead
+of failing, and progress resets the threshold. It fails only when the
+threshold would pass `--max-need` (75% of installed RAM), because the job then
+needs more memory than the machine can free.
 
 What ram-gate is doing right now is also in one line of `~/ramgate-status.txt`:
 

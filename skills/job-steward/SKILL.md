@@ -91,7 +91,12 @@ itself, and the user just uses their PC.
        -- python paint.py --out out ...
    ```
    It starts only after free RAM has stayed at or above `--need` GB for a
-   minute, so a browser closed for a moment doesn't trigger it.
+   minute, so a browser closed for a moment doesn't trigger it. A low-RAM
+   stop that finished nothing raises the next start's threshold by `--step-gb`
+   (1 GB), so a busy PC makes the job wait longer instead of failing. It fails
+   only past `--max-need` (75% of RAM). On 2026-10-10 the old rule (fail after
+   two such stops) killed the moon painter three times while the user had
+   Claude and Brave open.
 2. **Jobs must be resumable.** A restart has to skip finished items (pictures,
    audio chunks, frames). If a tool isn't, write its outputs one item at a time
    and skip existing files, or add `--limit N` style batching first.
