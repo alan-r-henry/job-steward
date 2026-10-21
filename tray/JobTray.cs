@@ -165,6 +165,8 @@ namespace JobTray
         // held for a reason: in the queue, or until the PC has RAM to spare
         public bool Waiting { get { return Shown == "waiting" || Shown == "low_ram" || Shown == "queued"; } }
         public bool Problem { get { return Shown == "failed" || Shown == "lost"; } }
+        // running but reporting no count or progress: the bar sweeps instead of filling
+        public bool Indeterminate { get { return (Shown == "running" || Shown == "starting") && !Fraction.HasValue; } }
 
         public double? Fraction
         {
@@ -542,15 +544,18 @@ namespace JobTray
             j.Eta = null;
             if (active && j.EtaSeconds.HasValue)
                 j.Eta = Math.Max(0, j.EtaSeconds.Value - (now - j.Updated));
-            else if (active && j.Done.HasValue && j.Total.HasValue && j.Total.Value > j.Done.Value)
+            else if (active && j.Fraction.HasValue && j.Fraction.Value < 1)
             {
-                // the rate since this tray first saw the job (waits included, so it stays honest)
+                // the rate since this tray first saw the job (waits included, so it stays honest);
+                // works from a count or from a bare progress fraction
+                double v = j.Fraction.Value;
                 double[] s;
-                if (!firstSample.TryGetValue(j.Id, out s) || j.Done.Value < s[1])
-                    firstSample[j.Id] = s = new[] { now, j.Done.Value };
-                double gained = j.Done.Value - s[1];
-                if (gained >= 1 && now - s[0] > 30)
-                    j.Eta = (j.Total.Value - j.Done.Value) * (now - s[0]) / gained;
+                if (!firstSample.TryGetValue(j.Id, out s) || v < s[1])
+                    firstSample[j.Id] = s = new[] { now, v };
+                double gained = v - s[1];
+                double step = j.Total.HasValue && j.Total.Value > 0 ? 1.0 / j.Total.Value : 0.01;
+                if (gained >= step && now - s[0] > 30)
+                    j.Eta = (1 - v) * (now - s[0]) / gained;
             }
         }
 
@@ -770,6 +775,10 @@ namespace JobTray
             titleFont = new Font("Segoe UI Semibold", 9.5f);
             bodyFont = new Font("Segoe UI", 9f);
             smallFont = new Font("Segoe UI", 8f);
+            // repaint while open so the sweep on progress-less jobs moves
+            var anim = new System.Windows.Forms.Timer { Interval = 50 };
+            anim.Tick += delegate { if (Visible && jobs.Any(j => j.Indeterminate)) Invalidate(); };
+            anim.Start();
             Deactivate += delegate { Hide(); };
             VisibleChanged += delegate { if (!Visible) HiddenAt = DateTime.Now; };
             KeyDown += (o, e) => { if (e.KeyCode == Keys.Escape) Hide(); };
@@ -804,7 +813,7 @@ namespace JobTray
         int RowHeight(Job j)
         {
             int h = 22 + 18 + 18;                       // title, detail, footer
-            if (j.Fraction.HasValue) h += 12;   // bar
+            if (j.Fraction.HasValue || j.Indeterminate) h += 12;   // bar
             if (j.ShownMessage != null) h += 18;
             return P(h + 20);
         }
@@ -909,7 +918,7 @@ namespace JobTray
             y += P(22);
 
             double? f = j.Fraction;
-            if (f.HasValue)
+            if (f.HasValue || j.Indeterminate)
             {
                 var bar = new Rectangle(x, y + P(2), width - P(4), P(5));
                 using (var path = Round(bar, P(2)))
@@ -919,6 +928,17 @@ namespace JobTray
                     var fill = new Rectangle(bar.X, bar.Y, Math.Max(P(5), (int)(bar.Width * f.Value)), bar.Height);
                     using (var path = Round(fill, P(2)))
                     using (var b = new SolidBrush(c)) g.FillPath(b, path);
+                }
+                else if (j.Indeterminate)
+                {
+                    // no progress reported: a segment sweeps along the track so the row still reads as alive
+                    int seg = bar.Width * 3 / 10;
+                    double phase = (Environment.TickCount & int.MaxValue) % 1600 / 1600.0;
+                    int sx = bar.X - seg + (int)((bar.Width + seg) * phase);
+                    var sweep = Rectangle.Intersect(new Rectangle(sx, bar.Y, seg, bar.Height), bar);
+                    if (sweep.Width > 0)
+                        using (var path = Round(sweep, P(2)))
+                        using (var b = new SolidBrush(c)) g.FillPath(b, path);
                 }
                 y += P(12);
             }
@@ -930,6 +950,8 @@ namespace JobTray
                 detail.Add(Util.Num(j.Done.Value) + (j.Unit != null ? " " + j.Unit : "") + " done");
             if (f.HasValue) detail.Add((int)Math.Round(f.Value * 100) + "%");
             if (j.Eta.HasValue) detail.Add("about " + Util.Duration(j.Eta.Value) + " left");
+            else if (j.Shown == "running" || j.Shown == "starting")
+                detail.Add(f.HasValue ? "estimating…" : "time left unknown");
             if (j.Active && j.Started > 0) detail.Add((j.Waiting ? "started " : "running ") + Util.Duration(now - j.Started) + (j.Waiting ? " ago" : ""));
             if (j.Shown == "lost") detail.Add("its process is gone; check the log");
             if (detail.Count == 0) detail.Add(Theme.Label(j.Shown));
