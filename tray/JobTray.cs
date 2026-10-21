@@ -425,8 +425,9 @@ namespace JobTray
                 }
                 Evaluate(j, now);
                 double age = now - j.Updated;
-                // finished jobs leave the list after a day, unexplained stops after three
-                if ((j.Shown == "done" || j.Shown == "failed") && age > 86400 || j.Shown == "lost" && age > 3 * 86400)
+                // done jobs leave the list 10 minutes after they finish, failed ones after a day
+                // (they keep their Retry button), unexplained stops after three
+                if (j.Shown == "done" && age > 600 || j.Shown == "failed" && age > 86400 || j.Shown == "lost" && age > 3 * 86400)
                 {
                     try { System.IO.File.Delete(f); } catch (Exception) { }
                     continue;
