@@ -7,8 +7,14 @@ after long and heavy jobs on a PC that someone is also using.
 area fills with the main job's progress. It turns amber while a job waits,
 purple while it waits for free RAM, and red when one fails or its process
 dies without finishing. A click opens the
-list: each job's progress bar, count, time left, current step, and links to
-its log and result. A notification says when something finishes or fails. Any
+list. At the top, a **Memory** card shows how much RAM is in use and which
+programs hold it: the five biggest (a browser's processes count as one row)
+and "Others" for everything else, each with an **End** button that stops
+that program after asking. Below it, each job's progress bar, count, time
+left, current step, the free RAM it needs to run safely and what it holds now,
+and links to its log and result. **End task** stops a running job's process
+and everything it started, after asking. Windows' own programs (services, the
+desktop) have no End button. A notification says when something finishes or fails. Any
 program, script or chat session can add a job by writing one small JSON file.
 The app uses about 25 MB of RAM and needs nothing installed.
 
@@ -77,6 +83,7 @@ One file per job in `~/.job-status/` (or `JOB_STATUS_DIR`), named `<id>.json`.
 | `pid`, `pid_started` | the process that lives for the whole job; if it is gone before `done`, the row turns red ("Stopped unexpectedly") |
 | `success` | a regex: if the pid is gone and the end of `log` matches it, the job counts as done |
 | `log`, `output` | files the list offers to open |
+| `need_gb` | free RAM (GB) the job needs to run safely, shown on its row; ram-gate sets it from `--need`, or pass `--need-gb` to `jobstatus.py` |
 | `eta_seconds` | time left, if the job knows better than the tray's estimate |
 | `parent` | the id of the main job this is a step (sub-job) of |
 | `order` | a step's position among its main job's steps (pipeline order); steps without one come after |

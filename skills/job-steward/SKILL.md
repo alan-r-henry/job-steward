@@ -72,6 +72,10 @@ In Python: `job = jobstatus.Job("id", "Title", total=75, unit="pictures")`, then
   because the PC is short of memory, so the user can tell it apart from a job
   that is only queued. ram-gate reports it by itself; a waiting message that
   mentions "low RAM" or "RAM free" also shows as Waiting for RAM.
+- **RAM**: the tray's list also shows what is using memory (top programs, with an End
+  button) and, per job, `need_gb` (free RAM it needs to run safely; ram-gate sets it from
+  `--need`, other jobs can pass `--need-gb`) and what its process tree holds now. A running
+  job has an **End task** button for the user; never end jobs for them.
 - **count/total/unit** give the bar and an ETA; `--progress 0.4` when there's no count.
 - **output**: the result (a video, a folder); the tray offers to open it when done.
 - **session**: optional, which chat or tool started it, when several run at once.

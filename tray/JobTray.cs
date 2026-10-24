@@ -93,6 +93,8 @@ namespace JobTray
         public string Retry, RetryCwd;   // command line that runs the job again, and where
         public int Depth, Children;
         public double? Done, Total, Progress, EtaSeconds, Order;
+        public double? NeedGb;    // free RAM the job needs to run safely
+        public long RamBytes;     // what the job's process tree holds now (set by the popup)
         public double Started, Updated, PidStarted;
         public int Pid;
         // worked out by the tray
@@ -142,6 +144,7 @@ namespace JobTray
             j.Pid = (int)(Num(d, "pid") ?? 0);
             j.PidStarted = Num(d, "pid_started") ?? 0;
             j.Order = Num(d, "order");
+            j.NeedGb = Num(d, "need_gb");
             return j;
         }
 
@@ -270,6 +273,48 @@ namespace JobTray
         }
 
         public static string Num(double v) { return v.ToString(v == Math.Floor(v) ? "0" : "0.#", CultureInfo.InvariantCulture); }
+
+        public static string Gb(double bytes)
+        {
+            double gb = bytes / 1073741824.0;
+            return (gb < 10 ? gb.ToString("0.0", CultureInfo.InvariantCulture) : ((int)Math.Round(gb)).ToString()) + " GB";
+        }
+
+        // the process and everything it started, like Task Manager's "End process tree"
+        public static bool KillTree(int pid)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("taskkill", "/F /T /PID " + pid) { CreateNoWindow = true, UseShellExecute = false };
+                using (var p = Process.Start(psi))
+                {
+                    p.WaitForExit(15000);
+                    return p.HasExited && p.ExitCode == 0;
+                }
+            }
+            catch (Exception) { return false; }
+        }
+
+        // say in the job's file that it was ended by hand, so the list shows why
+        public static void MarkEnded(string file)
+        {
+            try
+            {
+                var json = new JavaScriptSerializer();
+                string text;
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var r = new StreamReader(fs, Encoding.UTF8)) text = r.ReadToEnd();
+                var d = json.Deserialize<Dictionary<string, object>>(text);
+                d["state"] = "failed";
+                d["message"] = "ended from the tray";
+                d["updated"] = Now();
+                string tmp = file + ".tray.tmp";
+                System.IO.File.WriteAllText(tmp, json.Serialize(d), new UTF8Encoding(false));
+                System.IO.File.Copy(tmp, file, true);
+                System.IO.File.Delete(tmp);
+            }
+            catch (Exception) { }
+        }
 
         public static void Open(string path)
         {
@@ -698,9 +743,61 @@ namespace JobTray
                     dirty = true;
                 };
                 popup.Retry += RetryJob;
+                popup.EndJob += EndJob;
+                popup.EndApp += EndApp;
             }
             popup.SetJobs(jobs);
             popup.ShowNear();
+        }
+
+        // End task on a job: its process and everything it started
+        void EndJob(Job job)
+        {
+            popup.Hide();
+            if (job.Pid <= 4 || job.Pid == Process.GetCurrentProcess().Id || !Util.Alive(job.Pid, job.PidStarted))
+            {
+                dirty = true;
+                return;
+            }
+            var answer = MessageBox.Show("End \"" + job.Title + "\"?\n\nThis stops its process and everything it started. " +
+                                         "Work in progress is lost; finished items stay.", "JobTray",
+                                         MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (answer == DialogResult.OK)
+            {
+                bool ok = Util.KillTree(job.Pid);
+                Util.MarkEnded(job.File);
+                if (!ok) MessageBox.Show("Windows would not end it (it may belong to another user or be protected).", "JobTray");
+            }
+            dirty = true;
+            Refresh();
+            ShowPopup();
+        }
+
+        // End on a row of the memory list: every process of that program
+        void EndApp(RamApp app)
+        {
+            popup.Hide();
+            int self = Process.GetCurrentProcess().Id;
+            var answer = MessageBox.Show("End " + app.Name + (app.Count > 1 ? " (" + app.Count + " processes)" : "") + ", using " +
+                                         Util.Gb(app.Bytes) + "?\n\nAnything unsaved in it is lost.", "JobTray",
+                                         MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (answer == DialogResult.OK)
+            {
+                int failed = 0;
+                foreach (int pid in app.Pids)
+                {
+                    if (pid == self) continue;
+                    try
+                    {
+                        using (var p = Process.GetProcessById(pid))
+                            if (app.Processes.Contains(p.ProcessName)) p.Kill();   // not a reused pid
+                    }
+                    catch (ArgumentException) { }   // already gone
+                    catch (Exception) { failed++; }
+                }
+                if (failed > 0) MessageBox.Show(failed + " of its processes could not be ended (protected, or another user's).", "JobTray");
+            }
+            ShowPopup();
         }
 
         void RetryJob(Job job)
@@ -754,13 +851,20 @@ namespace JobTray
 
         public event Action<Job> Dismiss;
         public event Action<Job> Retry;
+        public event Action<Job> EndJob;
+        public event Action<RamApp> EndApp;
         public DateTime HiddenAt = DateTime.MinValue;
+        RamSnapshot snap;
+        static bool ramOpen = true;      // the memory list can be folded away
+        static bool minimized;           // the whole list shrunk to a header and one line
+        bool sampling;
+        int maxRows = 6;
         List<Job> jobs = new List<Job>();
         readonly List<KeyValuePair<Rectangle, Action>> links = new List<KeyValuePair<Rectangle, Action>>();
         readonly float s;
         readonly Font titleFont, bodyFont, smallFont, headFont;
         Theme t;
-        const int MaxRows = 6;
+        const int RamTop = 5;            // programs listed; "Others" is the sixth row
 
         public Popup()
         {
@@ -779,6 +883,10 @@ namespace JobTray
             var anim = new System.Windows.Forms.Timer { Interval = 50 };
             anim.Tick += delegate { if (Visible && jobs.Any(j => j.Indeterminate)) Invalidate(); };
             anim.Start();
+            // memory: look again every 2.5 s while the list is open
+            var ramTimer = new System.Windows.Forms.Timer { Interval = 2500 };
+            ramTimer.Tick += delegate { if (Visible) SampleRam(); };
+            ramTimer.Start();
             Deactivate += delegate { Hide(); };
             VisibleChanged += delegate { if (!Visible) HiddenAt = DateTime.Now; };
             KeyDown += (o, e) => { if (e.KeyCode == Keys.Escape) Hide(); };
@@ -815,7 +923,55 @@ namespace JobTray
             int h = 22 + 18 + 18;                       // title, detail, footer
             if (j.Fraction.HasValue || j.Indeterminate) h += 12;   // bar
             if (j.ShownMessage != null) h += 18;
+            if (HasRamLine(j)) h += 18;
             return P(h + 20);
+        }
+
+        // what a job needs and holds in memory; only for jobs that are live
+        static bool HasRamLine(Job j) { return j.Active && (j.NeedGb.HasValue || j.RamBytes > 0); }
+
+        string RamLine(Job j, out Color color)
+        {
+            color = t.Sub;
+            var parts = new List<string>();
+            if (j.NeedGb.HasValue) parts.Add("needs " + Util.Num(Math.Round(j.NeedGb.Value, 1)) + " GB free to run safely");
+            if (j.RamBytes > 0 && !j.Waiting) parts.Add("using " + Util.Gb(j.RamBytes));
+            if (j.Waiting && snap != null && j.NeedGb.HasValue)
+            {
+                parts.Add(Util.Gb(snap.Free) + " free now");
+                if (snap.Free < j.NeedGb.Value * 1073741824.0) color = t.For("low_ram");
+            }
+            return parts.Count == 0 ? null : string.Join("  ·  ", parts);
+        }
+
+        int RamBlockHeight()
+        {
+            if (snap == null) return 0;
+            if (!ramOpen) return P(34);
+            return P(34) + P(14) + (snap.Top.Count + 1) * P(20) + P(8);
+        }
+
+        // one line for the minimized list
+        string Summary()
+        {
+            var parts = new List<string>();
+            int running = jobs.Count(j => j.Shown == "running" || j.Shown == "starting");
+            int waiting = jobs.Count(j => j.Waiting && j.Shown != "queued");
+            int failed = jobs.Count(j => j.Problem);
+            if (running > 0) parts.Add(running + " running");
+            if (waiting > 0) parts.Add(waiting + " waiting");
+            if (failed > 0) parts.Add(failed + " failed");
+            if (parts.Count == 0) parts.Add("nothing running");
+            if (snap != null) parts.Add(Util.Gb(snap.Used) + " of " + Util.Gb(snap.Total) + " in use");
+            return string.Join("  ·  ", parts);
+        }
+
+        int ListHeight(List<List<Job>> cards, int rows)
+        {
+            if (minimized) return P(70);
+            int ram = snap == null ? 0 : RamBlockHeight() + P(8);
+            if (jobs.Count == 0) return P(52 + 70) + ram;
+            return P(52) + ram + cards.Take(rows).Sum(c => c.Sum(j => RowHeight(j)) + P(8)) + P(cards.Count > rows ? 28 : 6);
         }
 
         public void SetJobs(List<Job> list)
@@ -823,9 +979,13 @@ namespace JobTray
             jobs = list;
             t = Theme.Get(Util.LightTheme("AppsUseLightTheme"));
             BackColor = t.Back;
+            foreach (var j in jobs) j.RamBytes = snap != null && j.Active ? snap.TreeBytes(j.Pid) : 0;
             var cards = Cards();
-            int h = P(52) + cards.Take(MaxRows).Sum(c => c.Sum(j => RowHeight(j)) + P(8)) + P(cards.Count > MaxRows ? 28 : 6);
-            if (jobs.Count == 0) h = P(52 + 70);
+            // fewer job cards when the memory list and the cards together would not fit the screen
+            int limit = Screen.FromPoint(Cursor.Position).WorkingArea.Height - P(24);
+            maxRows = 6;
+            while (maxRows > 1 && ListHeight(cards, maxRows) > limit) maxRows--;
+            int h = ListHeight(cards, maxRows);
             int w = P(400);
             if (Width != w || Height != h)
             {
@@ -835,8 +995,37 @@ namespace JobTray
             Invalidate();
         }
 
+        // read memory off the UI thread, then redraw
+        void SampleRam()
+        {
+            if (sampling) return;
+            sampling = true;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                RamSnapshot s = null;
+                try { s = RamInfo.Take(RamTop); } catch (Exception) { }
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        sampling = false;
+                        if (s == null || IsDisposed) return;
+                        snap = s;
+                        SetJobs(jobs);
+                    });
+                }
+                catch (Exception) { sampling = false; }
+            });
+        }
+
         public void ShowNear()
         {
+            if (snap == null)
+            {
+                try { snap = RamInfo.Take(RamTop); } catch (Exception) { }
+                SetJobs(jobs);
+            }
+            SampleRam();
             Place();
             Show();
             Activate();
@@ -856,8 +1045,25 @@ namespace JobTray
             int pad = P(14), x = pad, width = Width - 2 * pad;
             double now = Util.Now();
             Draw(g, "Background jobs", headFont, t.Text, x, P(14), width);
-            Draw(g, "live", smallFont, t.Sub, x, P(17), width, TextFormatFlags.Right);
+            Draw(g, "live", smallFont, t.Sub, x, P(17), width - P(30), TextFormatFlags.Right);
+            // minimize: shrinks the list to its header and one summary line; click again to open it
+            var mini = new Rectangle(x + width - P(22), P(12), P(22), P(22));
+            using (var path = Round(mini, P(5)))
+            using (var b = new SolidBrush(t.Track)) g.FillPath(b, path);
+            TextRenderer.DrawText(g, minimized ? "+" : "–", titleFont, mini, t.Text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            links.Add(new KeyValuePair<Rectangle, Action>(mini, () => { minimized = !minimized; SetJobs(jobs); }));
+            if (minimized)
+            {
+                Draw(g, Summary(), bodyFont, t.Sub, x, P(42), width);
+                return;
+            }
             int y = P(48);
+            if (snap != null)
+            {
+                DrawRam(g, x, y, width);
+                y += RamBlockHeight() + P(8);
+            }
             if (jobs.Count == 0)
             {
                 Draw(g, "Nothing running.", bodyFont, t.Text, x, y + P(6), width);
@@ -865,7 +1071,7 @@ namespace JobTray
                 return;
             }
             var cards = Cards();
-            foreach (var card in cards.Take(MaxRows))
+            foreach (var card in cards.Take(maxRows))
             {
                 // one card per main job; its sub-jobs (steps) sit indented inside it
                 int h = card.Sum(j => RowHeight(j));
@@ -888,8 +1094,70 @@ namespace JobTray
                 }
                 y = top + h + P(8);
             }
-            if (cards.Count > MaxRows)
-                Draw(g, "+" + (cards.Count - MaxRows) + " more (Open status folder from the right-click menu)", smallFont, t.Sub, x, y, width);
+            if (cards.Count > maxRows)
+                Draw(g, "+" + (cards.Count - maxRows) + " more (Open status folder from the right-click menu)", smallFont, t.Sub, x, y, width);
+        }
+
+        // the memory card: total in use, then the biggest programs and "Others"
+        void DrawRam(Graphics g, int x, int y, int width)
+        {
+            int h = RamBlockHeight();
+            using (var path = Round(new Rectangle(x - P(4), y, width + P(8), h), P(8)))
+            using (var b = new SolidBrush(t.Card)) g.FillPath(b, path);
+            int left = x + P(8), right = x + width - P(4);
+
+            Draw(g, "Memory " + (ramOpen ? "▾" : "▸"), titleFont, t.Text, left, y + P(8), P(120));
+            double usedFrac = snap.Total > 0 ? Math.Min(1.0, (double)snap.Used / snap.Total) : 0;
+            Draw(g, Util.Gb(snap.Used) + " of " + Util.Gb(snap.Total) + " in use  ·  " + Util.Gb(snap.Free) + " free",
+                 smallFont, t.Sub, left + P(90), y + P(10), right - left - P(90), TextFormatFlags.Right);
+            // clicking the title folds the list
+            var fold = new Rectangle(left, y + P(4), P(100), P(26));
+            links.Add(new KeyValuePair<Rectangle, Action>(fold, () => { ramOpen = !ramOpen; SetJobs(jobs); }));
+            if (!ramOpen) return;
+
+            Color c = usedFrac >= 0.88 ? t.Red : usedFrac >= 0.75 ? t.Amber : t.Accent;
+            var bar = new Rectangle(left, y + P(32), right - left, P(5));
+            using (var path = Round(bar, P(2)))
+            using (var b = new SolidBrush(t.Track)) g.FillPath(b, path);
+            if (usedFrac > 0)
+                using (var path = Round(new Rectangle(bar.X, bar.Y, Math.Max(P(5), (int)(bar.Width * usedFrac)), bar.Height), P(2)))
+                using (var b = new SolidBrush(c)) g.FillPath(b, path);
+
+            int ry = y + P(34) + P(14);
+            int endW = P(34), gbW = P(58), nameW = P(132);
+            int barX = left + nameW, barW = right - endW - gbW - barX - P(6);
+            var rows = new List<RamApp>(snap.Top);
+            foreach (var a in rows)
+            {
+                string name = a.Name + (a.Count > 1 ? "  ×" + a.Count : "");
+                Draw(g, name, bodyFont, t.Text, left, ry, nameW - P(4));
+                DrawRamBar(g, barX, ry, barW, a.Bytes, t.Accent);
+                Draw(g, Util.Gb(a.Bytes), bodyFont, t.Text, barX + barW + P(4), ry, gbW, TextFormatFlags.Right);
+                if (a.CanEnd)
+                {
+                    var app = a;
+                    var rect = new Rectangle(right - endW + P(4), ry, endW, P(18));
+                    TextRenderer.DrawText(g, "End", smallFont, rect, t.Red, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    links.Add(new KeyValuePair<Rectangle, Action>(rect, () => { if (EndApp != null) EndApp(app); }));
+                }
+                ry += P(20);
+            }
+            string others = "Others" + (snap.OthersCount > 0 ? "  ×" + snap.OthersCount : "");
+            Draw(g, others, bodyFont, t.Sub, left, ry, nameW - P(4));
+            DrawRamBar(g, barX, ry, barW, snap.OthersBytes, t.Sub);
+            Draw(g, Util.Gb(snap.OthersBytes), bodyFont, t.Sub, barX + barW + P(4), ry, gbW, TextFormatFlags.Right);
+        }
+
+        // a row's share of the memory in use
+        void DrawRamBar(Graphics g, int x, int y, int width, long bytes, Color color)
+        {
+            var bar = new Rectangle(x, y + P(7), width, P(5));
+            using (var path = Round(bar, P(2)))
+            using (var b = new SolidBrush(t.Track)) g.FillPath(b, path);
+            double f = snap.Used > 0 ? Math.Min(1.0, (double)bytes / snap.Used) : 0;
+            if (f > 0)
+                using (var path = Round(new Rectangle(bar.X, bar.Y, Math.Max(P(3), (int)(bar.Width * f)), bar.Height), P(2)))
+                using (var b = new SolidBrush(color)) g.FillPath(b, path);
         }
 
         // the flat, nested list cut into cards: a main job and the sub-jobs after it
@@ -964,6 +1232,14 @@ namespace JobTray
                 y += P(18);
             }
 
+            if (HasRamLine(j))
+            {
+                Color rc;
+                string ram = RamLine(j, out rc);
+                if (ram != null) Draw(g, ram, smallFont, rc, x, y + P(1), width);
+                y += P(18);
+            }
+
             // footer: where it came from and how fresh, then links
             var who = new List<string>();
             if (j.Depth > 0) who.Add("sub-job");
@@ -977,6 +1253,8 @@ namespace JobTray
             // (sub-job) usually fails its main job too, and that row has the button.
             if (j.Problem && j.Retry != null)
                 actions.Add(new KeyValuePair<string, Action>("Retry", () => { if (Retry != null) Retry(j); }));
+            if (j.Active && j.Pid > 4)
+                actions.Add(new KeyValuePair<string, Action>("End task", () => { if (EndJob != null) EndJob(j); }));
             if (!j.Active || j.Shown == "lost")
                 actions.Add(new KeyValuePair<string, Action>("Dismiss", () => { if (Dismiss != null) Dismiss(j); }));
             if (j.Output != null && j.Shown == "done") actions.Add(new KeyValuePair<string, Action>("Open result", () => Util.Open(j.Output)));
@@ -995,7 +1273,7 @@ namespace JobTray
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
                 else
-                    TextRenderer.DrawText(g, a.Key, smallFont, rect.Location, t.Accent, TextFormatFlags.NoPrefix);
+                    TextRenderer.DrawText(g, a.Key, smallFont, rect.Location, a.Key == "End task" ? t.Red : t.Accent, TextFormatFlags.NoPrefix);
                 links.Add(new KeyValuePair<Rectangle, Action>(rect, a.Value));
                 right -= rect.Width + P(12);
             }

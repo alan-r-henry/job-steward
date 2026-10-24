@@ -80,6 +80,8 @@ STATUS_PATH = os.environ.get("RAMGATE_STATUS") or os.path.join(os.path.expanduse
 
 # the job's id in the JobTray list; set by run(), or JOB_STATUS_ID for a whole script
 JOB_ID: Optional[str] = os.environ.get("JOB_STATUS_ID")
+# free RAM (GB) the job needs to run safely; set by wait_for_ram, shown in the tray
+NEED_GB: Optional[float] = None
 
 
 def status(label: str, state: str, text: str, done: Optional[int] = None,
@@ -98,7 +100,7 @@ def status(label: str, state: str, text: str, done: Optional[int] = None,
         pass
     if jobstatus is not None:
         jobstatus.report(job_id or JOB_ID or label, title=label, state=state, message=text,
-                         done=done, total=total, pid=os.getpid())
+                         done=done, total=total, pid=os.getpid(), need_gb=NEED_GB)
 
 
 def free_gb() -> float:
@@ -187,6 +189,8 @@ def wait_for_ram(need_gb: float, label: str = "job", steady_s: float = 60,
     memory than this (checked once a minute), since the job would spill into RAM.
     job_id: its row in the tray (default: label).
     """
+    global NEED_GB
+    NEED_GB = need_gb
     since: Optional[float] = None
     held = False
     gpu_checked, desktop_gpu = 0.0, None

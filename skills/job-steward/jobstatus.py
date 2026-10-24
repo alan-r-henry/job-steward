@@ -228,7 +228,7 @@ def _windows_path(path: str) -> str:
 def _fields(args: argparse.Namespace) -> dict[str, Any]:
     keys = ("title", "project", "session", "state", "done", "total", "unit", "progress", "message",
             "eta_seconds", "pid", "log", "output", "tail", "count", "success", "parent",
-            "retry", "retry_cwd", "order")
+            "retry", "retry_cwd", "order", "need_gb")
     out = {k: getattr(args, k, None) for k in keys}
     for k in ("log", "output", "tail", "count"):
         if out[k]:
@@ -269,6 +269,8 @@ def main() -> int:
         p.add_argument("--progress", type=float, help="0..1 when there is no count")
         p.add_argument("--eta-seconds", type=float)
         p.add_argument("--pid", type=int, help="the process that lives for the whole job")
+        p.add_argument("--need-gb", type=float, dest="need_gb",
+                       help="free RAM (GB) the job needs to run safely; shown in the tray")
         p.add_argument("--log")
         p.add_argument("--tail", help="show this file's last line as the message")
         p.add_argument("--count", help="count files matching this pattern as done")
